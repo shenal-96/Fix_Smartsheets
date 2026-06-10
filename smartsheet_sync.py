@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import smartsheet
+from smartsheet.models import Folder as _Folder, Sheet as _Sheet
 
 
 # ----------------------------- Data classes -----------------------------
@@ -45,15 +46,33 @@ class SheetPlan:
 
 # ----------------------------- Workspace traversal -----------------------------
 
-def walk_folder(client, folder, rel_path: Tuple[str, ...]) -> List[SheetRef]:
+def _list_children(client, *, workspace_id=None, folder_id=None):
+    """Page through get_*_children and return the full list of child resources."""
+    items = []
+    last_key = None
+    while True:
+        if workspace_id is not None:
+            result = client.Workspaces.get_workspace_children(
+                workspace_id, last_key=last_key
+            )
+        else:
+            result = client.Folders.get_folder_children(
+                folder_id, last_key=last_key
+            )
+        items.extend(result.data or [])
+        last_key = getattr(result, "last_key", None)
+        if not last_key:
+            break
+    return items
+
+
+def walk_folder(client, folder_id: int, rel_path: Tuple[str, ...]) -> List[SheetRef]:
     sheets: List[SheetRef] = []
-    if folder.sheets:
-        for s in folder.sheets:
-            sheets.append(SheetRef(s.id, s.name, rel_path + (s.name,)))
-    if folder.folders:
-        for sub in folder.folders:
-            sub_full = client.Folders.get_folder(sub.id)
-            sheets.extend(walk_folder(client, sub_full, rel_path + (sub.name,)))
+    for child in _list_children(client, folder_id=folder_id):
+        if isinstance(child, _Sheet):
+            sheets.append(SheetRef(child.id, child.name, rel_path + (child.name,)))
+        elif isinstance(child, _Folder):
+            sheets.extend(walk_folder(client, child.id, rel_path + (child.name,)))
     return sheets
 
 
@@ -61,11 +80,13 @@ def get_workspace_layout(
     client, workspace_id: int, templates_folder_name: str
 ) -> Tuple[List[SheetRef], List[Tuple[str, List[SheetRef]]]]:
     """Returns (template_sheets, [(generator_folder_name, [sheets]) ...])."""
-    ws = client.Workspaces.get_workspace(workspace_id)
+    top_level = _list_children(client, workspace_id=workspace_id)
 
     templates_folder = None
     generator_folders = []
-    for f in (ws.folders or []):
+    for f in top_level:
+        if not isinstance(f, _Folder):
+            continue
         if f.name == templates_folder_name:
             templates_folder = f
         else:
@@ -80,13 +101,11 @@ def get_workspace_layout(
             f"No generator folders found in workspace {workspace_id} (only '{templates_folder_name}' exists)."
         )
 
-    tf_full = client.Folders.get_folder(templates_folder.id)
-    template_sheets = walk_folder(client, tf_full, tuple())
+    template_sheets = walk_folder(client, templates_folder.id, tuple())
 
     generators = []
     for gf in generator_folders:
-        gf_full = client.Folders.get_folder(gf.id)
-        generators.append((gf.name, walk_folder(client, gf_full, tuple())))
+        generators.append((gf.name, walk_folder(client, gf.id, tuple())))
 
     return template_sheets, generators
 
