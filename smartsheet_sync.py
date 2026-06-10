@@ -109,7 +109,11 @@ _READONLY_SYSTEM_COLUMN_TYPES = frozenset({
 def column_is_editable(col) -> bool:
     """A column is read-only only if it is a known Smartsheet system column type."""
     system_type = getattr(col, "system_column_type", None)
-    return system_type not in _READONLY_SYSTEM_COLUMN_TYPES
+    # The SDK exposes system_column_type as an EnumeratedValue (unhashable),
+    # so normalise to a plain string before comparing.
+    if system_type is None:
+        return True
+    return str(system_type) not in _READONLY_SYSTEM_COLUMN_TYPES
 
 
 def row_to_data(row, col_id_to_name: Dict[int, str]) -> RowData:
@@ -430,7 +434,7 @@ def fetch_sheet_columns(
     """Return (col_name_to_id, ordered_col_names, col_name_to_type, col_name_to_editable)."""
     sheet, col_name_to_id, _, _ = fetch_sheet(client, sheet_id)
     col_names_ordered = [c.title for c in sheet.columns]
-    col_name_to_type = {c.title: c.type for c in sheet.columns}
+    col_name_to_type = {c.title: str(c.type) for c in sheet.columns}
     col_name_to_editable = {c.title: column_is_editable(c) for c in sheet.columns}
     return col_name_to_id, col_names_ordered, col_name_to_type, col_name_to_editable
 
