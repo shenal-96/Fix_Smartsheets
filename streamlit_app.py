@@ -91,6 +91,7 @@ def init_state() -> None:
         "Check Status\nSigned Off By\nDate Completed\nComments"
     )
     st.session_state.cfg_key_column = ""
+    st.session_state.cfg_instance_rows = ""
     st.session_state.plans = []
     st.session_state.scan_data = None
     st.session_state.scan_timestamp = None
@@ -204,6 +205,13 @@ with st.sidebar:
             placeholder="(use primary column)",
             help="Leave blank to match rows on the primary column.",
         )
+        st.text_area(
+            "Instance rows (one key per line)",
+            key="cfg_instance_rows",
+            help="Row keys that are generator-specific and must never be updated or deleted (e.g. the row containing the generator serial number).",
+            height=100,
+            placeholder="e.g. 0.02",
+        )
 
     st.divider()
     with st.expander("About", expanded=False):
@@ -244,6 +252,7 @@ except ValueError:
     st.stop()
 
 instance_columns = [c.strip() for c in instance_columns_text.split("\n") if c.strip()]
+instance_rows = [r.strip() for r in st.session_state.cfg_instance_rows.split("\n") if r.strip()]
 
 
 # ============================================================
@@ -284,6 +293,7 @@ if scan_clicked:
                 instance_columns,
                 key_column_input.strip() or None,
                 allow_empty_master=False,
+                instance_rows=instance_rows or None,
             )
 
             st.session_state.plans = plans

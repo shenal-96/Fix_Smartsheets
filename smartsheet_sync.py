@@ -125,8 +125,10 @@ def compute_diff(
     generator_rows: List[RowData],
     template_columns: List[str],
     key_column: str,
+    instance_rows: Optional[List[str]] = None,
 ) -> Tuple[List[RowData], List[Tuple[RowData, RowData]], List[RowData], List[str]]:
     warnings: List[str] = []
+    instance_row_set = set(instance_rows) if instance_rows else set()
 
     master_by_key: Dict[str, RowData] = {}
     dup_keys = set()
@@ -152,10 +154,10 @@ def compute_diff(
         warnings.append(f"{orphan} generator row(s) have empty key — left alone (not deleted).")
 
     to_add = [m for k, m in master_by_key.items() if k not in gen_by_key]
-    to_delete = [g for k, g in gen_by_key.items() if k not in master_by_key]
+    to_delete = [g for k, g in gen_by_key.items() if k not in master_by_key and k not in instance_row_set]
     to_update: List[Tuple[RowData, RowData]] = []
     for k, mrow in master_by_key.items():
-        if k not in gen_by_key:
+        if k not in gen_by_key or k in instance_row_set:
             continue
         grow = gen_by_key[k]
         for col in template_columns:
@@ -175,6 +177,7 @@ def build_plans(
     instance_columns: List[str],
     key_column_override: Optional[str],
     allow_empty_master: bool = False,
+    instance_rows: Optional[List[str]] = None,
 ) -> Tuple[List[SheetPlan], List[str]]:
     """Returns (plans, warnings)."""
     plans: List[SheetPlan] = []
@@ -217,7 +220,7 @@ def build_plans(
                 )
 
             gen_rows = [row_to_data(r, gen_col_id_to_name) for r in (gen_sheet.rows or [])]
-            to_add, to_update, to_delete, w = compute_diff(master_rows, gen_rows, template_columns, key_column)
+            to_add, to_update, to_delete, w = compute_diff(master_rows, gen_rows, template_columns, key_column, instance_rows)
             for x in w:
                 warnings.append(f"[{gen_folder_name}] {x}")
 
