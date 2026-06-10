@@ -52,7 +52,7 @@ def _save_prefs() -> None:
 # Page config
 # ============================================================
 st.set_page_config(
-    page_title="Checklist Sync",
+    page_title="SmartSheets Editor",
     page_icon="checkmark",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -158,7 +158,7 @@ st.markdown(
 # Sidebar -- settings
 # ============================================================
 with st.sidebar:
-    st.markdown("## Checklist Sync")
+    st.markdown("## SmartSheets Editor")
     st.caption("Smartsheet master -> generator copies")
     st.divider()
 
@@ -219,10 +219,10 @@ with st.sidebar:
 # ============================================================
 # Main area -- header
 # ============================================================
-st.title("Checklist Sync")
+st.title("SmartSheets Editor")
 st.markdown(
     '<p style="color:#6F7585;margin-top:-12px;">'
-    "Propagate master checklist changes across every generator in a Smartsheet project."
+    "Making SmartSheets smart again, multiple sheets at a time. Your welcome!"
     "</p>",
     unsafe_allow_html=True,
 )
