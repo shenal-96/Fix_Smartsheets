@@ -465,13 +465,44 @@ def add_row_to_sheet(
     values: Dict[str, str],
     col_name_to_type: Optional[Dict[str, str]] = None,
     col_name_to_editable: Optional[Dict[str, bool]] = None,
+    position: str = "bottom",
+    sibling_row_number: Optional[int] = None,
 ) -> None:
-    """Append a new row at the bottom of a sheet. Blank values are skipped.
+    """Insert a new row into a sheet. Blank values are skipped.
+
+    Positioning is controlled by ``position``:
+      * ``"bottom"`` (default) -- append at the bottom of the sheet.
+      * ``"top"``    -- insert at the top of the sheet.
+      * ``"above"``  -- insert directly above the row at 1-based
+                        ``sibling_row_number``.
+      * ``"below"``  -- insert directly below the row at 1-based
+                        ``sibling_row_number``.
 
     Skips system/formula columns and converts CHECKBOX values to booleans.
     """
     row = smartsheet.models.Row()
-    row.to_bottom = True
+
+    if position in ("above", "below"):
+        if sibling_row_number is None:
+            raise ValueError(
+                "sibling_row_number is required when position is 'above' or 'below'."
+            )
+        sheet = client.Sheets.get_sheet(sheet_id)
+        rows = sheet.rows or []
+        if not rows:
+            raise ValueError("Sheet has no rows to position relative to.")
+        if sibling_row_number < 1 or sibling_row_number > len(rows):
+            raise ValueError(
+                f"Row {sibling_row_number} is out of range "
+                f"(sheet has {len(rows)} rows)."
+            )
+        row.sibling_id = rows[sibling_row_number - 1].id
+        row.above = position == "above"
+    elif position == "top":
+        row.to_top = True
+    else:
+        row.to_bottom = True
+
     for col_name, value in values.items():
         if col_name not in col_name_to_id:
             continue
