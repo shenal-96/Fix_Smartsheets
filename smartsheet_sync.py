@@ -377,8 +377,12 @@ def update_row_cells(
     row_id: int,
     col_name_to_id: Dict[str, int],
     updates: Dict[str, str],
+    col_name_to_type: Optional[Dict[str, str]] = None,
 ) -> None:
-    """Write cell updates to a row. Only sends columns with actual content."""
+    """Write cell updates to a row. Only sends columns with actual content.
+
+    Converts values to appropriate types (e.g., string "true"/"false" -> boolean for CHECKBOX).
+    """
     row = smartsheet.models.Row()
     row.id = row_id
     for col_name, new_value in updates.items():
@@ -387,19 +391,30 @@ def update_row_cells(
         val = (new_value or "").strip()
         if not val:
             continue
+
         cell = smartsheet.models.Cell()
         cell.column_id = col_name_to_id[col_name]
-        cell.value = val
+
+        # Convert value based on column type
+        col_type = col_name_to_type.get(col_name) if col_name_to_type else None
+        if col_type == "CHECKBOX":
+            cell.value = val.lower() in ("true", "1", "yes", "checked")
+        else:
+            cell.value = val
+
         row.cells.append(cell)
     if row.cells:
         client.Sheets.update_rows(sheet_id, [row])
 
 
-def fetch_sheet_columns(client, sheet_id: int) -> Tuple[Dict[str, int], List[str]]:
-    """Return (col_name_to_id, ordered_col_names) without loading row data."""
+def fetch_sheet_columns(
+    client, sheet_id: int
+) -> Tuple[Dict[str, int], List[str], Dict[str, str]]:
+    """Return (col_name_to_id, ordered_col_names, col_name_to_type)."""
     sheet, col_name_to_id, _, _ = fetch_sheet(client, sheet_id)
     col_names_ordered = [c.title for c in sheet.columns]
-    return col_name_to_id, col_names_ordered
+    col_name_to_type = {c.title: c.type for c in sheet.columns}
+    return col_name_to_id, col_names_ordered, col_name_to_type
 
 
 def add_row_to_sheet(

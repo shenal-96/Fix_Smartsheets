@@ -104,6 +104,7 @@ def init_state() -> None:
     st.session_state.setdefault("fr_add_col_names", [])
     st.session_state.setdefault("fr_add_col_name_to_id", {})
     st.session_state.setdefault("fr_add_result", None)
+    st.session_state.setdefault("fr_col_name_to_type", {})
 
 
 def reset_results() -> None:
@@ -685,12 +686,16 @@ with tab2:
                                                 int(st.session_state.fr_row_number),
                                             )
                                         )
+                                        _, _, target_col_name_to_type = sync.fetch_sheet_columns(
+                                            client, target_sheet.sheet_id
+                                        )
                                         sync.update_row_cells(
                                             client,
                                             target_sheet.sheet_id,
                                             target_row_data.row_id,
                                             target_col_name_to_id,
                                             edited_values,
+                                            target_col_name_to_type,
                                         )
                                         results.append({"ok": True, "folder": fname})
                                     except Exception as e:
@@ -771,13 +776,14 @@ with tab2:
                                 ):
                                     client = smartsheet.Smartsheet(api_token)
                                     client.errors_as_exceptions(True)
-                                    col_name_to_id, col_names_ordered = (
+                                    col_name_to_id, col_names_ordered, col_name_to_type = (
                                         sync.fetch_sheet_columns(
                                             client, ref_sheet.sheet_id
                                         )
                                     )
                                 st.session_state.fr_add_col_names = col_names_ordered
                                 st.session_state.fr_add_col_name_to_id = col_name_to_id
+                                st.session_state.fr_col_name_to_type = col_name_to_type
                                 st.session_state.fr_add_result = None
                                 for col_name in col_names_ordered:
                                     st.session_state[f"fr_new_{col_name}"] = ""
@@ -838,7 +844,7 @@ with tab2:
                                         continue
 
                                     try:
-                                        target_col_name_to_id, _ = sync.fetch_sheet_columns(
+                                        target_col_name_to_id, _, _ = sync.fetch_sheet_columns(
                                             client, target_sheet.sheet_id
                                         )
                                         sync.add_row_to_sheet(
