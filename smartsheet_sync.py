@@ -101,15 +101,15 @@ def fetch_sheet(client, sheet_id: int):
     return sheet, col_name_to_id, col_id_to_name, primary
 
 
+_READONLY_SYSTEM_COLUMN_TYPES = frozenset({
+    "AUTO_NUMBER", "MODIFIED_DATE", "MODIFIED_BY", "CREATED_DATE", "CREATED_BY"
+})
+
+
 def column_is_editable(col) -> bool:
-    """A column can be written to unless it's a system column or formula column."""
-    # System columns (Auto Number, Created/Modified Date/By) are read-only.
-    if getattr(col, "system_column_type", None):
-        return False
-    # Formula columns are computed and can't be set directly.
-    if getattr(col, "formula", None):
-        return False
-    return True
+    """A column is read-only only if it is a known Smartsheet system column type."""
+    system_type = getattr(col, "system_column_type", None)
+    return system_type not in _READONLY_SYSTEM_COLUMN_TYPES
 
 
 def row_to_data(row, col_id_to_name: Dict[int, str]) -> RowData:
