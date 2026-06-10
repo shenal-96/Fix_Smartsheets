@@ -390,3 +390,32 @@ def update_row_cells(
         row.cells.append(cell)
     if row.cells:
         client.Sheets.update_rows(sheet_id, [row])
+
+
+def fetch_sheet_columns(client, sheet_id: int) -> Tuple[Dict[str, int], List[str]]:
+    """Return (col_name_to_id, ordered_col_names) without loading row data."""
+    sheet, col_name_to_id, _, _ = fetch_sheet(client, sheet_id)
+    col_names_ordered = [c.title for c in sheet.columns]
+    return col_name_to_id, col_names_ordered
+
+
+def add_row_to_sheet(
+    client,
+    sheet_id: int,
+    col_name_to_id: Dict[str, int],
+    values: Dict[str, str],
+) -> None:
+    """Append a new row at the bottom of a sheet. Blank values are skipped."""
+    row = smartsheet.models.Row()
+    row.to_bottom = True
+    for col_name, value in values.items():
+        if col_name not in col_name_to_id:
+            continue
+        if not (value and value.strip()):
+            continue
+        cell = smartsheet.models.Cell()
+        cell.column_id = col_name_to_id[col_name]
+        cell.value = value
+        row.cells.append(cell)
+    if row.cells:
+        client.Sheets.add_rows(sheet_id, [row])

@@ -1,5 +1,5 @@
 """
-streamlit_app.py — Streamlit UI for Smartsheet Checklist Sync.
+streamlit_app.py -- Streamlit UI for Smartsheet Checklist Sync.
 
 Designed for deployment on Streamlit Community Cloud:
   https://share.streamlit.io
@@ -20,7 +20,7 @@ import smartsheet
 import smartsheet_sync as sync
 
 # ============================================================
-# Local prefs — persist token + workspace ID across page refreshes
+# Local prefs -- persist token + workspace ID across page refreshes
 # ============================================================
 _PREFS_PATH = os.path.join(os.path.dirname(__file__), ".streamlit", "user_prefs.json")
 
@@ -53,7 +53,7 @@ def _save_prefs() -> None:
 # ============================================================
 st.set_page_config(
     page_title="Checklist Sync",
-    page_icon="⊟",
+    page_icon="checkmark",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -74,11 +74,9 @@ def init_state() -> None:
     if "plans" not in st.session_state:
         prefs = _load_prefs()
 
-        # Priority: saved prefs > Streamlit secrets > empty
         st.session_state.cfg_api_token = (
             prefs.get("api_token") or get_secret("SMARTSHEET_API_TOKEN", "")
         )
-        # Priority: URL param > saved prefs > Streamlit secrets > empty
         st.session_state.cfg_workspace_id = (
             st.query_params.get("wid", "")
             or prefs.get("workspace_id", "")
@@ -95,7 +93,7 @@ def init_state() -> None:
         st.session_state.confirm_apply = False
         st.session_state.apply_result = None
 
-    # Row Editor state — safe to call on every rerun via setdefault
+    # Row Editor / Add Row state -- safe to call on every rerun via setdefault
     st.session_state.setdefault("fr_folders_list", None)
     st.session_state.setdefault("fr_sheets_by_folder", {})
     st.session_state.setdefault("fr_loaded_row", None)
@@ -103,6 +101,9 @@ def init_state() -> None:
     st.session_state.setdefault("fr_col_name_to_id", {})
     st.session_state.setdefault("fr_row_number", 1)
     st.session_state.setdefault("fr_apply_result", None)
+    st.session_state.setdefault("fr_add_col_names", [])
+    st.session_state.setdefault("fr_add_col_name_to_id", {})
+    st.session_state.setdefault("fr_add_result", None)
 
 
 def reset_results() -> None:
@@ -117,26 +118,17 @@ init_state()
 
 
 # ============================================================
-# Custom CSS — a few tweaks to elevate the default look
+# Custom CSS
 # ============================================================
 st.markdown(
     """
     <style>
-    /* Cream-ish background tone */
     .stApp { background-color: #F6F2E8; }
-
-    /* Tighter heading sizes, more editorial */
     h1 { font-weight: 600 !important; letter-spacing: -0.02em; }
     h2, h3 { letter-spacing: -0.01em; }
-
-    /* Sidebar background */
     section[data-testid="stSidebar"] { background-color: #FBF8F0; border-right: 1px solid #E0D8C2; }
-
-    /* Metrics: tighter look */
     div[data-testid="stMetricValue"] { font-size: 1.9rem; font-weight: 600; }
     div[data-testid="stMetricLabel"] { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
-
-    /* Diff-style monospace blocks */
     .diff-add    { background: #E9F0E9; color: #2F6A4E; padding: 4px 8px; border-left: 3px solid #2F6A4E; font-family: monospace; font-size: 0.875rem; margin: 2px 0; border-radius: 3px; }
     .diff-update { background: #F4ECD8; color: #9C6A2E; padding: 4px 8px; border-left: 3px solid #9C6A2E; font-family: monospace; font-size: 0.875rem; margin: 2px 0; border-radius: 3px; }
     .diff-delete { background: #F1DDDF; color: #97384A; padding: 4px 8px; border-left: 3px solid #97384A; font-family: monospace; font-size: 0.875rem; margin: 2px 0; border-radius: 3px; }
@@ -144,12 +136,8 @@ st.markdown(
     .diff-detail .old { color: #97384A; text-decoration: line-through; }
     .diff-detail .new { color: #2F6A4E; }
     .diff-detail .col { color: #6F7585; }
-
-    /* Buttons */
     div.stButton > button[kind="primary"] { background-color: #234E7A; border-color: #234E7A; }
     div.stButton > button[kind="primary"]:hover { background-color: #16365A; border-color: #16365A; }
-
-    /* Smaller "Last scan" caption */
     .scan-meta { color: #6F7585; font-family: monospace; font-size: 0.8rem; padding-top: 12px; }
     </style>
     """,
@@ -158,11 +146,11 @@ st.markdown(
 
 
 # ============================================================
-# Sidebar — settings
+# Sidebar -- settings
 # ============================================================
 with st.sidebar:
     st.markdown("## Checklist Sync")
-    st.caption("Smartsheet master → generator copies")
+    st.caption("Smartsheet master -> generator copies")
     st.divider()
 
     st.markdown("### Connection")
@@ -171,7 +159,7 @@ with st.sidebar:
         type="password",
         key="cfg_api_token",
         on_change=_save_prefs,
-        help="Generate in Smartsheet: Account → Personal Settings → API Access.",
+        help="Generate in Smartsheet: Account -> Personal Settings -> API Access.",
     )
     api_token = st.session_state.cfg_api_token
 
@@ -180,10 +168,9 @@ with st.sidebar:
         "Workspace ID",
         key="cfg_workspace_id",
         on_change=_save_prefs,
-        help="The project workspace ID. Right-click workspace in Smartsheet → Properties.",
+        help="The project workspace ID. Right-click workspace in Smartsheet -> Properties.",
     )
     workspace_id = st.session_state.cfg_workspace_id
-    # Keep workspace ID in the URL so the page can be bookmarked / refreshed
     if workspace_id.strip():
         st.query_params["wid"] = workspace_id.strip()
     elif "wid" in st.query_params:
@@ -212,7 +199,7 @@ with st.sidebar:
     with st.expander("About", expanded=False):
         st.markdown(
             """
-            Edit the master in `Templates/` → run a scan → apply.
+            Edit the master in `Templates/` -> run a scan -> apply.
             Instance columns (status, signoff, date, comments) are never touched.
 
             See the README in the GitHub repo for setup details.
@@ -221,7 +208,7 @@ with st.sidebar:
 
 
 # ============================================================
-# Main area — header
+# Main area -- header
 # ============================================================
 st.title("Checklist Sync")
 st.markdown(
@@ -233,11 +220,11 @@ st.markdown(
 
 # ---- Validation gates ----
 if not api_token:
-    st.info("👈 Enter your Smartsheet API token in the sidebar to begin.")
+    st.info("Enter your Smartsheet API token in the sidebar to begin.")
     st.stop()
 
 if not workspace_id.strip():
-    st.info("👈 Enter your project Workspace ID in the sidebar.")
+    st.info("Enter your project Workspace ID in the sidebar.")
     st.stop()
 
 try:
@@ -255,7 +242,7 @@ tab1, tab2 = st.tabs(["Checklist Sync", "Row Editor"])
 
 
 # ============================================================
-# Tab 1 — Checklist Sync (existing scan / apply workflow)
+# Tab 1 -- Checklist Sync (existing scan / apply workflow)
 # ============================================================
 with tab1:
 
@@ -264,7 +251,7 @@ with tab1:
     col_a, col_b = st.columns([1, 4])
     with col_a:
         scan_clicked = st.button(
-            "🔍 Scan workspace",
+            "Scan workspace",
             type="primary",
             use_container_width=True,
             disabled=st.session_state.confirm_apply,
@@ -272,17 +259,21 @@ with tab1:
     with col_b:
         if st.session_state.scan_timestamp:
             st.markdown(
-                f'<div class="scan-meta">Last scan: '
-                f'{st.session_state.scan_timestamp.strftime("%Y-%m-%d %H:%M:%S")}</div>',
+                '<div class="scan-meta">Last scan: '
+                + st.session_state.scan_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                + "</div>",
                 unsafe_allow_html=True,
             )
 
-    st.caption("Reads every master sheet and compares it to the matching sheet in each generator folder. No changes are written.")
+    st.caption(
+        "Reads every master sheet and compares it to the matching sheet in each generator folder. "
+        "No changes are written."
+    )
 
     if scan_clicked:
         reset_results()
         try:
-            with st.spinner("Reading workspace…"):
+            with st.spinner("Reading workspace..."):
                 client = smartsheet.Smartsheet(api_token)
                 client.errors_as_exceptions(True)
 
@@ -312,10 +303,7 @@ with tab1:
         except Exception as e:
             st.error(f"Scan failed: {type(e).__name__}: {e}")
 
-
-    # ============================================================
-    # Render scan results
-    # ============================================================
+    # ---- Render scan results ----
     if st.session_state.scan_data:
         data = st.session_state.scan_data
         plans_serialized = data["plans_serialized"]
@@ -323,31 +311,26 @@ with tab1:
         total_adds = sum(p["counts"]["add"] for p in plans_serialized)
         total_updates = sum(p["counts"]["update"] for p in plans_serialized)
         total_deletes = sum(p["counts"]["delete"] for p in plans_serialized)
-        total_ops = total_adds + total_updates + total_deletes
 
-        # ----- Stats row -----
         st.divider()
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Masters", data["master_count"])
         m2.metric("Generators", data["generator_count"])
         m3.metric("Add", f"+{total_adds}")
         m4.metric("Update", f"~{total_updates}")
-        m5.metric("Delete", f"−{total_deletes}")
+        m5.metric("Delete", f"-{total_deletes}")
 
-        # ----- Warnings -----
         if data["warnings"]:
-            with st.expander(f"⚠️ {len(data['warnings'])} warning(s)"):
+            with st.expander(f"  {len(data['warnings'])} warning(s)"):
                 for w in data["warnings"]:
                     st.markdown(f"- `{w}`")
 
-        # ----- Plans -----
         if not plans_serialized:
-            st.success("✅ Every generator sheet matches its master. Nothing to apply.")
+            st.success("Every generator sheet matches its master. Nothing to apply.")
         else:
             st.divider()
             st.subheader("Preview")
 
-            # Group by generator folder for visual organisation
             groups: dict = {}
             for p in plans_serialized:
                 groups.setdefault(p["generator_folder"], []).append(p)
@@ -356,11 +339,9 @@ with tab1:
                 st.markdown(f"#### `{folder_name}`")
                 for p in sheets_in_folder:
                     counts = p["counts"]
-                    summary_pills = (
-                        f"`+{counts['add']}` `~{counts['update']}` `−{counts['delete']}`"
-                    )
+                    summary = f"`+{counts['add']}` `~{counts['update']}` `-{counts['delete']}`"
                     with st.expander(
-                        f"**{p['generator_path']}**  ·  {summary_pills}",
+                        f"**{p['generator_path']}**  .  {summary}",
                         expanded=(len(sheets_in_folder) == 1 and len(groups) == 1),
                     ):
                         st.caption(f"Key column: `{p['key_column']}`")
@@ -383,14 +364,14 @@ with tab1:
                                     unsafe_allow_html=True,
                                 )
                                 for d in r["diffs"]:
-                                    old = d["old"] or "∅"
-                                    new = d["new"] or "∅"
+                                    old = d["old"] or "(empty)"
+                                    new = d["new"] or "(empty)"
                                     st.markdown(
                                         f'<div class="diff-detail">'
                                         f'<span class="col">{d["column"]}:</span> '
-                                        f'<span class="old">{old}</span> → '
+                                        f'<span class="old">{old}</span> '
                                         f'<span class="new">{new}</span>'
-                                        f'</div>',
+                                        f"</div>",
                                         unsafe_allow_html=True,
                                     )
 
@@ -399,25 +380,21 @@ with tab1:
                             for r in p["rows_to_delete"]:
                                 key = r["key"] or "(no key)"
                                 st.markdown(
-                                    f'<div class="diff-delete">− {key}</div>',
+                                    f'<div class="diff-delete">- {key}</div>',
                                     unsafe_allow_html=True,
                                 )
 
-            # ----- Apply controls -----
+            # ---- Apply controls ----
             st.divider()
             st.subheader("Apply")
 
             if not st.session_state.confirm_apply:
                 st.markdown(
-                    f"Ready to write **+{total_adds} adds · ~{total_updates} updates · "
-                    f"−{total_deletes} deletes** across **{len(plans_serialized)} sheet(s)**. "
+                    f"Ready to write **+{total_adds} adds / ~{total_updates} updates / "
+                    f"-{total_deletes} deletes** across **{len(plans_serialized)} sheet(s)**. "
                     "Instance columns will not be touched."
                 )
-                if st.button(
-                    "Apply changes",
-                    type="primary",
-                    use_container_width=False,
-                ):
+                if st.button("Apply changes", type="primary", use_container_width=False):
                     st.session_state.confirm_apply = True
                     st.rerun()
             else:
@@ -427,21 +404,27 @@ with tab1:
                 )
                 cc1, cc2, _ = st.columns([1, 1, 3])
                 with cc1:
-                    if st.button("✓ Yes, apply", type="primary", use_container_width=True):
+                    if st.button("Yes, apply", type="primary", use_container_width=True):
                         results = []
-                        progress = st.progress(0.0, text="Applying…")
+                        progress = st.progress(0.0, text="Applying...")
                         try:
                             client = smartsheet.Smartsheet(api_token)
                             client.errors_as_exceptions(True)
                             plans_list = st.session_state.plans
                             for i, plan in enumerate(plans_list):
-                                label = f"{plan.generator_folder} / {'/'.join(plan.generator.rel_path)}"
+                                label = (
+                                    f"{plan.generator_folder} / "
+                                    f"{'/'.join(plan.generator.rel_path)}"
+                                )
                                 try:
                                     sync.apply_plan(client, plan)
                                     results.append({"ok": True, "label": label})
                                 except Exception as e:
                                     results.append({"ok": False, "label": label, "error": str(e)})
-                                progress.progress((i + 1) / len(plans_list), text=f"Applying… ({i + 1}/{len(plans_list)})")
+                                progress.progress(
+                                    (i + 1) / len(plans_list),
+                                    text=f"Applying... ({i + 1}/{len(plans_list)})",
+                                )
                         finally:
                             progress.empty()
                         st.session_state.apply_result = results
@@ -454,27 +437,24 @@ with tab1:
                         st.session_state.confirm_apply = False
                         st.rerun()
 
-
-    # ============================================================
-    # Apply results (after a successful apply)
-    # ============================================================
+    # ---- Apply results ----
     if st.session_state.apply_result:
         st.divider()
         st.subheader("Apply result")
         results = st.session_state.apply_result
         fails = [r for r in results if not r["ok"]]
         if not fails:
-            st.success(f"✅ Synced {len(results)} sheet(s) successfully.")
+            st.success(f"Synced {len(results)} sheet(s) successfully.")
         elif len(fails) == len(results):
-            st.error(f"❌ All {len(results)} sheet(s) failed.")
+            st.error(f"All {len(results)} sheet(s) failed.")
         else:
-            st.warning(f"⚠️ {len(results) - len(fails)} succeeded · {len(fails)} failed.")
+            st.warning(f"{len(results) - len(fails)} succeeded / {len(fails)} failed.")
 
         for r in results:
             if r["ok"]:
-                st.markdown(f"✓ `{r['label']}`")
+                st.markdown(f"+ `{r['label']}`")
             else:
-                st.markdown(f"✗ `{r['label']}`")
+                st.markdown(f"x `{r['label']}`")
                 st.code(r.get("error", ""), language=None)
 
         if st.button("Clear and run another scan"):
@@ -483,12 +463,12 @@ with tab1:
 
 
 # ============================================================
-# Tab 2 — Row Editor (find & replace)
+# Tab 2 -- Row Editor / Add Row
 # ============================================================
 with tab2:
     st.markdown(
-        "Select folders, pick a sheet and row number, load the current values, "
-        "edit them, then apply across all selected folders."
+        "Select folders and a sheet, then edit an existing row or append a new one "
+        "across all selected folders."
     )
 
     # ---- Step 1: Load workspace folders & sheets ----
@@ -503,7 +483,7 @@ with tab2:
 
     if load_ws_clicked:
         try:
-            with st.spinner("Loading folders and sheets…"):
+            with st.spinner("Loading folders and sheets..."):
                 client = smartsheet.Smartsheet(api_token)
                 client.errors_as_exceptions(True)
                 folders = sync.list_workspace_folders(client, workspace_id_int)
@@ -512,10 +492,12 @@ with tab2:
                     sheets_by_folder[fname] = sync.list_sheets_in_folder(client, fid)
             st.session_state.fr_folders_list = folders
             st.session_state.fr_sheets_by_folder = sheets_by_folder
-            # Clear stale row data when workspace is reloaded
             st.session_state.fr_loaded_row = None
             st.session_state.fr_loaded_col_names = []
             st.session_state.fr_apply_result = None
+            st.session_state.fr_add_col_names = []
+            st.session_state.fr_add_col_name_to_id = {}
+            st.session_state.fr_add_result = None
         except smartsheet.exceptions.ApiError as e:
             st.error(f"Smartsheet API error: {e}")
         except Exception as e:
@@ -533,7 +515,7 @@ with tab2:
             "Folders to apply changes to",
             options=folder_names,
             key="fr_selected_folders",
-            help="Row updates will be written to the matching sheet in every selected folder.",
+            help="Changes will be written to the matching sheet in every selected folder.",
         )
 
         if not selected_folders:
@@ -541,7 +523,6 @@ with tab2:
         else:
             sheets_by_folder = st.session_state.fr_sheets_by_folder
 
-            # Collect unique sheet paths present across selected folders
             sheet_paths: set = set()
             for fname in selected_folders:
                 for sref in sheets_by_folder.get(fname, []):
@@ -551,12 +532,15 @@ with tab2:
             if not sheet_path_list:
                 st.warning("No sheets found in the selected folders.")
             else:
-                # Reset sheet selection when the available options no longer include it
+                # Reset sheet selection when options no longer include current value
                 current_sheet = st.session_state.get("fr_selected_sheet_path", "")
-                if current_sheet not in sheet_path_list and "fr_selected_sheet_path" in st.session_state:
+                if (
+                    current_sheet not in sheet_path_list
+                    and "fr_selected_sheet_path" in st.session_state
+                ):
                     del st.session_state["fr_selected_sheet_path"]
 
-                # ---- Step 3: Select sheet + row number ----
+                # ---- Step 3: Select sheet ----
                 st.selectbox(
                     "Sheet",
                     options=sheet_path_list,
@@ -565,169 +549,338 @@ with tab2:
                 )
                 selected_sheet_path = st.session_state.fr_selected_sheet_path
 
-                st.number_input(
-                    "Row number",
-                    min_value=1,
-                    value=int(st.session_state.fr_row_number),
-                    step=1,
-                    key="fr_row_number_input",
-                    help="1-based row position (row 1 = first data row).",
+                # ---- Mode selector ----
+                mode = st.radio(
+                    "Action",
+                    options=["Edit existing row", "Add new row"],
+                    key="fr_mode",
+                    horizontal=True,
                 )
 
-                # ---- Step 4: Load row ----
-                load_row_clicked = st.button(
-                    "Load Row",
-                    type="primary",
-                    key="fr_load_row",
-                )
+                st.divider()
 
-                if load_row_clicked:
-                    row_num = int(st.session_state.fr_row_number_input)
-                    # Find a reference sheet to read current values from
-                    ref_sheet = None
-                    ref_folder_name = None
-                    for fname in selected_folders:
-                        for sref in sheets_by_folder.get(fname, []):
-                            if "/".join(sref.rel_path) == selected_sheet_path:
-                                ref_sheet = sref
-                                ref_folder_name = fname
-                                break
-                        if ref_sheet:
-                            break
-
-                    if ref_sheet is None:
-                        st.error("Selected sheet not found in any of the chosen folders.")
-                    else:
-                        try:
-                            with st.spinner(
-                                f"Loading row {row_num} from "
-                                f"'{ref_folder_name}/{selected_sheet_path}'…"
-                            ):
-                                client = smartsheet.Smartsheet(api_token)
-                                client.errors_as_exceptions(True)
-                                row_data, col_name_to_id, col_names_ordered = (
-                                    sync.fetch_row_by_number(
-                                        client, ref_sheet.sheet_id, row_num
-                                    )
-                                )
-                            st.session_state.fr_loaded_row = row_data
-                            st.session_state.fr_loaded_col_names = col_names_ordered
-                            st.session_state.fr_col_name_to_id = col_name_to_id
-                            st.session_state.fr_row_number = row_num
-                            st.session_state.fr_apply_result = None
-                            # Pre-populate each text input with the current cell value
-                            for col_name in col_names_ordered:
-                                val = row_data.cells_by_col_name.get(col_name, "")
-                                st.session_state[f"fr_cell_{col_name}"] = (
-                                    str(val) if val is not None else ""
-                                )
-                        except ValueError as e:
-                            st.error(str(e))
-                        except smartsheet.exceptions.ApiError as e:
-                            st.error(f"Smartsheet API error: {e}")
-                        except Exception as e:
-                            st.error(f"Failed to load row: {e}")
-
-                # ---- Step 5: Editable row form ----
-                loaded_row = st.session_state.fr_loaded_row
-                col_names = st.session_state.fr_loaded_col_names
-
-                if loaded_row is not None:
-                    st.divider()
-                    st.subheader(
-                        f"Row {st.session_state.fr_row_number} — `{selected_sheet_path}`"
+                # ================================================
+                # Mode A -- Edit existing row
+                # ================================================
+                if mode == "Edit existing row":
+                    st.number_input(
+                        "Row number",
+                        min_value=1,
+                        value=int(st.session_state.fr_row_number),
+                        step=1,
+                        key="fr_row_number_input",
+                        help="1-based row position (row 1 = first data row).",
                     )
-                    st.caption("Edit the values below. Leave a field blank to clear that cell.")
 
-                    edited_values: dict = {}
-                    for col_name in col_names:
-                        edited_values[col_name] = st.text_input(
-                            col_name,
-                            key=f"fr_cell_{col_name}",
-                        )
-
-                    st.divider()
-
-                    apply_label = (
-                        f"Apply to {len(selected_folders)} folder(s)"
-                        if len(selected_folders) > 1
-                        else f"Apply to '{selected_folders[0]}'"
-                    )
-                    apply_clicked = st.button(
-                        apply_label,
+                    load_row_clicked = st.button(
+                        "Load Row",
                         type="primary",
-                        key="fr_apply_row",
+                        key="fr_load_row",
                     )
 
-                    if apply_clicked:
-                        results = []
-                        try:
-                            client = smartsheet.Smartsheet(api_token)
-                            client.errors_as_exceptions(True)
-                            progress = st.progress(0.0, text="Applying…")
+                    if load_row_clicked:
+                        row_num = int(st.session_state.fr_row_number_input)
+                        ref_sheet = None
+                        ref_folder_name = None
+                        for fname in selected_folders:
+                            for sref in sheets_by_folder.get(fname, []):
+                                if "/".join(sref.rel_path) == selected_sheet_path:
+                                    ref_sheet = sref
+                                    ref_folder_name = fname
+                                    break
+                            if ref_sheet:
+                                break
 
-                            for idx, fname in enumerate(selected_folders):
-                                target_sheet = None
-                                for sref in sheets_by_folder.get(fname, []):
-                                    if "/".join(sref.rel_path) == selected_sheet_path:
-                                        target_sheet = sref
-                                        break
-
-                                if target_sheet is None:
-                                    results.append({
-                                        "ok": False,
-                                        "folder": fname,
-                                        "error": "Sheet not found in this folder.",
-                                    })
-                                    progress.progress((idx + 1) / len(selected_folders))
-                                    continue
-
-                                try:
-                                    target_row_data, target_col_name_to_id, _ = (
+                        if ref_sheet is None:
+                            st.error("Selected sheet not found in any of the chosen folders.")
+                        else:
+                            try:
+                                with st.spinner(
+                                    f"Loading row {row_num} from "
+                                    f"'{ref_folder_name}/{selected_sheet_path}'..."
+                                ):
+                                    client = smartsheet.Smartsheet(api_token)
+                                    client.errors_as_exceptions(True)
+                                    row_data, col_name_to_id, col_names_ordered = (
                                         sync.fetch_row_by_number(
-                                            client,
-                                            target_sheet.sheet_id,
-                                            int(st.session_state.fr_row_number),
+                                            client, ref_sheet.sheet_id, row_num
                                         )
                                     )
-                                    sync.update_row_cells(
-                                        client,
-                                        target_sheet.sheet_id,
-                                        target_row_data.row_id,
-                                        target_col_name_to_id,
-                                        edited_values,
+                                st.session_state.fr_loaded_row = row_data
+                                st.session_state.fr_loaded_col_names = col_names_ordered
+                                st.session_state.fr_col_name_to_id = col_name_to_id
+                                st.session_state.fr_row_number = row_num
+                                st.session_state.fr_apply_result = None
+                                for col_name in col_names_ordered:
+                                    val = row_data.cells_by_col_name.get(col_name, "")
+                                    st.session_state[f"fr_cell_{col_name}"] = (
+                                        str(val) if val is not None else ""
                                     )
-                                    results.append({"ok": True, "folder": fname})
-                                except Exception as e:
-                                    results.append({"ok": False, "folder": fname, "error": str(e)})
+                            except ValueError as e:
+                                st.error(str(e))
+                            except smartsheet.exceptions.ApiError as e:
+                                st.error(f"Smartsheet API error: {e}")
+                            except Exception as e:
+                                st.error(f"Failed to load row: {e}")
 
-                                progress.progress((idx + 1) / len(selected_folders))
+                    loaded_row = st.session_state.fr_loaded_row
+                    col_names = st.session_state.fr_loaded_col_names
 
-                            progress.empty()
-                        except Exception as e:
-                            st.error(f"Unexpected error: {e}")
-
-                        st.session_state.fr_apply_result = results
-                        st.rerun()
-
-                # ---- Apply results ----
-                fr_apply_result = st.session_state.fr_apply_result
-                if fr_apply_result:
-                    st.divider()
-                    fails = [r for r in fr_apply_result if not r["ok"]]
-                    row_num_done = st.session_state.fr_row_number
-                    if not fails:
-                        st.success(
-                            f"✅ Row {row_num_done} updated in {len(fr_apply_result)} folder(s)."
+                    if loaded_row is not None:
+                        st.subheader(
+                            f"Row {st.session_state.fr_row_number} -- {selected_sheet_path}"
                         )
-                    elif len(fails) == len(fr_apply_result):
-                        st.error(f"❌ All {len(fr_apply_result)} update(s) failed.")
-                    else:
-                        st.warning(
-                            f"⚠️ {len(fr_apply_result) - len(fails)} succeeded · {len(fails)} failed."
+                        st.caption(
+                            "Edit the values below. Leave a field blank to clear that cell."
                         )
-                    for r in fr_apply_result:
-                        if r["ok"]:
-                            st.markdown(f"✓ `{r['folder']}`")
+
+                        edited_values: dict = {}
+                        for col_name in col_names:
+                            edited_values[col_name] = st.text_input(
+                                col_name,
+                                key=f"fr_cell_{col_name}",
+                            )
+
+                        st.divider()
+
+                        apply_label = (
+                            f"Apply to {len(selected_folders)} folder(s)"
+                            if len(selected_folders) > 1
+                            else f"Apply to '{selected_folders[0]}'"
+                        )
+                        apply_clicked = st.button(
+                            apply_label,
+                            type="primary",
+                            key="fr_apply_row",
+                        )
+
+                        if apply_clicked:
+                            results = []
+                            try:
+                                client = smartsheet.Smartsheet(api_token)
+                                client.errors_as_exceptions(True)
+                                progress = st.progress(0.0, text="Applying...")
+
+                                for idx, fname in enumerate(selected_folders):
+                                    target_sheet = None
+                                    for sref in sheets_by_folder.get(fname, []):
+                                        if "/".join(sref.rel_path) == selected_sheet_path:
+                                            target_sheet = sref
+                                            break
+
+                                    if target_sheet is None:
+                                        results.append({
+                                            "ok": False,
+                                            "folder": fname,
+                                            "error": "Sheet not found in this folder.",
+                                        })
+                                        progress.progress((idx + 1) / len(selected_folders))
+                                        continue
+
+                                    try:
+                                        target_row_data, target_col_name_to_id, _ = (
+                                            sync.fetch_row_by_number(
+                                                client,
+                                                target_sheet.sheet_id,
+                                                int(st.session_state.fr_row_number),
+                                            )
+                                        )
+                                        sync.update_row_cells(
+                                            client,
+                                            target_sheet.sheet_id,
+                                            target_row_data.row_id,
+                                            target_col_name_to_id,
+                                            edited_values,
+                                        )
+                                        results.append({"ok": True, "folder": fname})
+                                    except Exception as e:
+                                        results.append({
+                                            "ok": False,
+                                            "folder": fname,
+                                            "error": str(e),
+                                        })
+
+                                    progress.progress((idx + 1) / len(selected_folders))
+
+                                progress.empty()
+                            except Exception as e:
+                                st.error(f"Unexpected error: {e}")
+
+                            st.session_state.fr_apply_result = results
+                            st.rerun()
+
+                        fr_apply_result = st.session_state.fr_apply_result
+                        if fr_apply_result:
+                            st.divider()
+                            fails = [r for r in fr_apply_result if not r["ok"]]
+                            row_num_done = st.session_state.fr_row_number
+                            if not fails:
+                                st.success(
+                                    f"Row {row_num_done} updated in "
+                                    f"{len(fr_apply_result)} folder(s)."
+                                )
+                            elif len(fails) == len(fr_apply_result):
+                                st.error(f"All {len(fr_apply_result)} update(s) failed.")
+                            else:
+                                st.warning(
+                                    f"{len(fr_apply_result) - len(fails)} succeeded / "
+                                    f"{len(fails)} failed."
+                                )
+                            for r in fr_apply_result:
+                                if r["ok"]:
+                                    st.markdown(f"+ `{r['folder']}`")
+                                else:
+                                    st.markdown(
+                                        f"x `{r['folder']}`: {r.get('error', 'Unknown error')}"
+                                    )
+
+                # ================================================
+                # Mode B -- Add new row
+                # ================================================
+                else:
+                    st.caption(
+                        "Load the sheet's column structure, fill in values for the new row, "
+                        "then add it to the bottom of the sheet in every selected folder."
+                    )
+
+                    load_cols_clicked = st.button(
+                        "Load Sheet Columns",
+                        type="primary",
+                        key="fr_load_cols",
+                    )
+
+                    if load_cols_clicked:
+                        ref_sheet = None
+                        ref_folder_name = None
+                        for fname in selected_folders:
+                            for sref in sheets_by_folder.get(fname, []):
+                                if "/".join(sref.rel_path) == selected_sheet_path:
+                                    ref_sheet = sref
+                                    ref_folder_name = fname
+                                    break
+                            if ref_sheet:
+                                break
+
+                        if ref_sheet is None:
+                            st.error("Selected sheet not found in any of the chosen folders.")
                         else:
-                            st.markdown(f"✗ `{r['folder']}`: {r.get('error', 'Unknown error')}")
+                            try:
+                                with st.spinner(
+                                    f"Loading columns from "
+                                    f"'{ref_folder_name}/{selected_sheet_path}'..."
+                                ):
+                                    client = smartsheet.Smartsheet(api_token)
+                                    client.errors_as_exceptions(True)
+                                    col_name_to_id, col_names_ordered = (
+                                        sync.fetch_sheet_columns(
+                                            client, ref_sheet.sheet_id
+                                        )
+                                    )
+                                st.session_state.fr_add_col_names = col_names_ordered
+                                st.session_state.fr_add_col_name_to_id = col_name_to_id
+                                st.session_state.fr_add_result = None
+                                for col_name in col_names_ordered:
+                                    st.session_state[f"fr_new_{col_name}"] = ""
+                            except smartsheet.exceptions.ApiError as e:
+                                st.error(f"Smartsheet API error: {e}")
+                            except Exception as e:
+                                st.error(f"Failed to load columns: {e}")
+
+                    add_col_names = st.session_state.fr_add_col_names
+
+                    if add_col_names:
+                        st.subheader(f"New row -- {selected_sheet_path}")
+                        st.caption(
+                            "Fill in the values for the new row. Blank fields will be skipped."
+                        )
+
+                        new_values: dict = {}
+                        for col_name in add_col_names:
+                            new_values[col_name] = st.text_input(
+                                col_name,
+                                key=f"fr_new_{col_name}",
+                            )
+
+                        st.divider()
+
+                        add_label = (
+                            f"Add row to {len(selected_folders)} folder(s)"
+                            if len(selected_folders) > 1
+                            else f"Add row to '{selected_folders[0]}'"
+                        )
+                        add_clicked = st.button(
+                            add_label,
+                            type="primary",
+                            key="fr_add_row",
+                        )
+
+                        if add_clicked:
+                            results = []
+                            try:
+                                client = smartsheet.Smartsheet(api_token)
+                                client.errors_as_exceptions(True)
+                                progress = st.progress(0.0, text="Adding rows...")
+
+                                for idx, fname in enumerate(selected_folders):
+                                    target_sheet = None
+                                    for sref in sheets_by_folder.get(fname, []):
+                                        if "/".join(sref.rel_path) == selected_sheet_path:
+                                            target_sheet = sref
+                                            break
+
+                                    if target_sheet is None:
+                                        results.append({
+                                            "ok": False,
+                                            "folder": fname,
+                                            "error": "Sheet not found in this folder.",
+                                        })
+                                        progress.progress((idx + 1) / len(selected_folders))
+                                        continue
+
+                                    try:
+                                        target_col_name_to_id, _ = sync.fetch_sheet_columns(
+                                            client, target_sheet.sheet_id
+                                        )
+                                        sync.add_row_to_sheet(
+                                            client,
+                                            target_sheet.sheet_id,
+                                            target_col_name_to_id,
+                                            new_values,
+                                        )
+                                        results.append({"ok": True, "folder": fname})
+                                    except Exception as e:
+                                        results.append({
+                                            "ok": False,
+                                            "folder": fname,
+                                            "error": str(e),
+                                        })
+
+                                    progress.progress((idx + 1) / len(selected_folders))
+
+                                progress.empty()
+                            except Exception as e:
+                                st.error(f"Unexpected error: {e}")
+
+                            st.session_state.fr_add_result = results
+                            st.rerun()
+
+                    fr_add_result = st.session_state.fr_add_result
+                    if fr_add_result:
+                        st.divider()
+                        fails = [r for r in fr_add_result if not r["ok"]]
+                        if not fails:
+                            st.success(f"New row added to {len(fr_add_result)} folder(s).")
+                        elif len(fails) == len(fr_add_result):
+                            st.error(f"All {len(fr_add_result)} add(s) failed.")
+                        else:
+                            st.warning(
+                                f"{len(fr_add_result) - len(fails)} succeeded / "
+                                f"{len(fails)} failed."
+                            )
+                        for r in fr_add_result:
+                            if r["ok"]:
+                                st.markdown(f"+ `{r['folder']}`")
+                            else:
+                                st.markdown(
+                                    f"x `{r['folder']}`: {r.get('error', 'Unknown error')}"
+                                )
