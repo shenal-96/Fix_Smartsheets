@@ -5,10 +5,30 @@ templates to generator copies. Importable; no printing, no argv parsing.
 Used by both the CLI (sync_checklist.py) and the web app (app.py).
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import smartsheet
+
+
+# ----------------------------- Rate-limit retry -----------------------------
+
+def _call_with_retry(fn, *args, max_retries: int = 6, **kwargs):
+    """Call fn(*args, **kwargs), retrying on Smartsheet 429 rate-limit errors
+    with exponential backoff (2 s → 4 s → 8 s … up to 64 s)."""
+    delay = 2
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except smartsheet.exceptions.ApiError as e:
+            result = getattr(getattr(e, "error", None), "result", None)
+            should_retry = getattr(result, "should_retry", False)
+            if should_retry and attempt < max_retries:
+                time.sleep(delay)
+                delay = min(delay * 2, 64)
+            else:
+                raise
 
 
 # ----------------------------- Data classes -----------------------------
@@ -52,7 +72,7 @@ def walk_folder(client, folder, rel_path: Tuple[str, ...]) -> List[SheetRef]:
             sheets.append(SheetRef(s.id, s.name, rel_path + (s.name,)))
     if folder.folders:
         for sub in folder.folders:
-            sub_full = client.Folders.get_folder(sub.id)
+            sub_full = _call_with_retry(client.Folders.get_folder, sub.id)
             sheets.extend(walk_folder(client, sub_full, rel_path + (sub.name,)))
     return sheets
 
@@ -61,7 +81,7 @@ def get_workspace_layout(
     client, workspace_id: int, templates_folder_name: str
 ) -> Tuple[List[SheetRef], List[Tuple[str, List[SheetRef]]]]:
     """Returns (template_sheets, [(generator_folder_name, [sheets]) ...])."""
-    ws = client.Workspaces.get_workspace(workspace_id)
+    ws = _call_with_retry(client.Workspaces.get_workspace, workspace_id)
 
     templates_folder = None
     generator_folders = []
@@ -80,12 +100,12 @@ def get_workspace_layout(
             f"No generator folders found in workspace {workspace_id} (only '{templates_folder_name}' exists)."
         )
 
-    tf_full = client.Folders.get_folder(templates_folder.id)
+    tf_full = _call_with_retry(client.Folders.get_folder, templates_folder.id)
     template_sheets = walk_folder(client, tf_full, tuple())
 
     generators = []
     for gf in generator_folders:
-        gf_full = client.Folders.get_folder(gf.id)
+        gf_full = _call_with_retry(client.Folders.get_folder, gf.id)
         generators.append((gf.name, walk_folder(client, gf_full, tuple())))
 
     return template_sheets, generators
@@ -94,7 +114,7 @@ def get_workspace_layout(
 # ----------------------------- Sheet reading -----------------------------
 
 def fetch_sheet(client, sheet_id: int):
-    sheet = client.Sheets.get_sheet(sheet_id)
+    sheet = _call_with_retry(client.Sheets.get_sheet, sheet_id)
     col_name_to_id = {c.title: c.id for c in sheet.columns}
     col_id_to_name = {c.id: c.title for c in sheet.columns}
     primary = next((c.title for c in sheet.columns if c.primary), None)
@@ -264,7 +284,7 @@ def apply_plan(client, plan: SheetPlan) -> None:
                     row.cells.append(cell)
             new_rows.append(row)
         for batch in _chunked(new_rows, 200):
-            client.Sheets.add_rows(sheet_id, batch)
+            _call_with_retry(client.Sheets.add_rows, sheet_id, batch)
 
     if plan.rows_to_update:
         upd = []
@@ -279,12 +299,12 @@ def apply_plan(client, plan: SheetPlan) -> None:
                     row.cells.append(cell)
             upd.append(row)
         for batch in _chunked(upd, 200):
-            client.Sheets.update_rows(sheet_id, batch)
+            _call_with_retry(client.Sheets.update_rows, sheet_id, batch)
 
     if plan.rows_to_delete:
         ids = [r.row_id for r in plan.rows_to_delete]
         for batch in _chunked(ids, 200):
-            client.Sheets.delete_rows(sheet_id, batch)
+            _call_with_retry(client.Sheets.delete_rows, sheet_id, batch)
 
 
 # ----------------------------- Serialization for web UI -----------------------------
