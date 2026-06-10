@@ -96,14 +96,18 @@ def init_state() -> None:
     st.session_state.scan_timestamp = None
     st.session_state.confirm_apply = False
     st.session_state.apply_result = None
+    st.session_state.selected_plan_ids = set()
 
 
 def reset_results() -> None:
+    for pid in st.session_state.get("selected_plan_ids", set()):
+        st.session_state.pop(f"sel_{pid}", None)
     st.session_state.plans = []
     st.session_state.scan_data = None
     st.session_state.scan_timestamp = None
     st.session_state.confirm_apply = False
     st.session_state.apply_result = None
+    st.session_state.selected_plan_ids = set()
 
 
 init_state()
@@ -283,6 +287,10 @@ if scan_clicked:
             )
 
             st.session_state.plans = plans
+            plan_ids = set(range(len(plans)))
+            st.session_state.selected_plan_ids = plan_ids
+            for pid in plan_ids:
+                st.session_state[f"sel_{pid}"] = True
             st.session_state.scan_data = {
                 "plans_serialized": [sync.plan_to_dict(p, i) for i, p in enumerate(plans)],
                 "warnings": warnings,
@@ -333,6 +341,18 @@ if st.session_state.scan_data:
         st.divider()
         st.subheader("Preview")
 
+        sel_col1, sel_col2, _ = st.columns([1, 1, 8])
+        with sel_col1:
+            if st.button("Select all", use_container_width=True):
+                for p in plans_serialized:
+                    st.session_state[f"sel_{p['id']}"] = True
+                st.rerun()
+        with sel_col2:
+            if st.button("Select none", use_container_width=True):
+                for p in plans_serialized:
+                    st.session_state[f"sel_{p['id']}"] = False
+                st.rerun()
+
         # Group by generator folder for visual organisation
         groups: dict = {}
         for p in plans_serialized:
@@ -345,64 +365,84 @@ if st.session_state.scan_data:
                 summary_pills = (
                     f"`+{counts['add']}` `~{counts['update']}` `−{counts['delete']}`"
                 )
-                with st.expander(
-                    f"**{p['generator_path']}**  ·  {summary_pills}",
-                    expanded=(len(sheets_in_folder) == 1 and len(groups) == 1),
-                ):
-                    st.caption(f"Key column: `{p['key_column']}`")
+                chk_col, exp_col = st.columns([0.04, 0.96])
+                with chk_col:
+                    st.checkbox(
+                        "",
+                        key=f"sel_{p['id']}",
+                        label_visibility="collapsed",
+                    )
+                with exp_col:
+                    with st.expander(
+                        f"**{p['generator_path']}**  ·  {summary_pills}",
+                        expanded=(len(sheets_in_folder) == 1 and len(groups) == 1),
+                    ):
+                        st.caption(f"Key column: `{p['key_column']}`")
 
-                    if p["rows_to_add"]:
-                        st.markdown(f"**Add ({len(p['rows_to_add'])})**")
-                        for r in p["rows_to_add"]:
-                            key = r["key"] or "(no key)"
-                            st.markdown(
-                                f'<div class="diff-add">+ {key}</div>',
-                                unsafe_allow_html=True,
-                            )
-
-                    if p["rows_to_update"]:
-                        st.markdown(f"**Update ({len(p['rows_to_update'])})**")
-                        for r in p["rows_to_update"]:
-                            key = r["key"] or "(no key)"
-                            st.markdown(
-                                f'<div class="diff-update">~ {key}</div>',
-                                unsafe_allow_html=True,
-                            )
-                            for d in r["diffs"]:
-                                old = d["old"] or "∅"
-                                new = d["new"] or "∅"
+                        if p["rows_to_add"]:
+                            st.markdown(f"**Add ({len(p['rows_to_add'])})**")
+                            for r in p["rows_to_add"]:
+                                key = r["key"] or "(no key)"
                                 st.markdown(
-                                    f'<div class="diff-detail">'
-                                    f'<span class="col">{d["column"]}:</span> '
-                                    f'<span class="old">{old}</span> → '
-                                    f'<span class="new">{new}</span>'
-                                    f'</div>',
+                                    f'<div class="diff-add">+ {key}</div>',
                                     unsafe_allow_html=True,
                                 )
 
-                    if p["rows_to_delete"]:
-                        st.markdown(f"**Delete ({len(p['rows_to_delete'])})**")
-                        for r in p["rows_to_delete"]:
-                            key = r["key"] or "(no key)"
-                            st.markdown(
-                                f'<div class="diff-delete">− {key}</div>',
-                                unsafe_allow_html=True,
-                            )
+                        if p["rows_to_update"]:
+                            st.markdown(f"**Update ({len(p['rows_to_update'])})**")
+                            for r in p["rows_to_update"]:
+                                key = r["key"] or "(no key)"
+                                st.markdown(
+                                    f'<div class="diff-update">~ {key}</div>',
+                                    unsafe_allow_html=True,
+                                )
+                                for d in r["diffs"]:
+                                    old = d["old"] or "∅"
+                                    new = d["new"] or "∅"
+                                    st.markdown(
+                                        f'<div class="diff-detail">'
+                                        f'<span class="col">{d["column"]}:</span> '
+                                        f'<span class="old">{old}</span> → '
+                                        f'<span class="new">{new}</span>'
+                                        f'</div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                        if p["rows_to_delete"]:
+                            st.markdown(f"**Delete ({len(p['rows_to_delete'])})**")
+                            for r in p["rows_to_delete"]:
+                                key = r["key"] or "(no key)"
+                                st.markdown(
+                                    f'<div class="diff-delete">− {key}</div>',
+                                    unsafe_allow_html=True,
+                                )
 
         # ----- Apply controls -----
         st.divider()
         st.subheader("Apply")
 
+        selected_plans_serialized = [
+            p for p in plans_serialized if st.session_state.get(f"sel_{p['id']}", True)
+        ]
+        sel_adds = sum(p["counts"]["add"] for p in selected_plans_serialized)
+        sel_updates = sum(p["counts"]["update"] for p in selected_plans_serialized)
+        sel_deletes = sum(p["counts"]["delete"] for p in selected_plans_serialized)
+        n_selected = len(selected_plans_serialized)
+
         if not st.session_state.confirm_apply:
-            st.markdown(
-                f"Ready to write **+{total_adds} adds · ~{total_updates} updates · "
-                f"−{total_deletes} deletes** across **{len(plans_serialized)} sheet(s)**. "
-                "Instance columns will not be touched."
-            )
+            if n_selected == 0:
+                st.warning("No sheets selected. Tick at least one sheet above to apply changes.")
+            else:
+                st.markdown(
+                    f"Ready to write **+{sel_adds} adds · ~{sel_updates} updates · "
+                    f"−{sel_deletes} deletes** across **{n_selected} of {len(plans_serialized)} sheet(s)**. "
+                    "Instance columns will not be touched."
+                )
             if st.button(
                 "Apply changes",
                 type="primary",
                 use_container_width=False,
+                disabled=(n_selected == 0),
             ):
                 st.session_state.confirm_apply = True
                 st.rerun()
@@ -414,12 +454,16 @@ if st.session_state.scan_data:
             cc1, cc2, _ = st.columns([1, 1, 3])
             with cc1:
                 if st.button("✓ Yes, apply", type="primary", use_container_width=True):
+                    selected_ids = {p["id"] for p in selected_plans_serialized}
+                    plans_list = [
+                        plan for i, plan in enumerate(st.session_state.plans)
+                        if i in selected_ids
+                    ]
                     results = []
                     progress = st.progress(0.0, text="Applying…")
                     try:
                         client = smartsheet.Smartsheet(api_token)
                         client.errors_as_exceptions(True)
-                        plans_list = st.session_state.plans
                         for i, plan in enumerate(plans_list):
                             label = f"{plan.generator_folder} / {'/'.join(plan.generator.rel_path)}"
                             try:
