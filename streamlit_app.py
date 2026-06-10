@@ -107,6 +107,10 @@ def init_state() -> None:
     st.session_state.setdefault("fr_col_name_to_type", {})
     st.session_state.setdefault("fr_col_name_to_editable", {})
     st.session_state.setdefault("fr_add_col_name_to_editable", {})
+    st.session_state.setdefault("fr_del_loaded_row", None)
+    st.session_state.setdefault("fr_del_col_names", [])
+    st.session_state.setdefault("fr_del_row_number", 1)
+    st.session_state.setdefault("fr_del_result", None)
 
 
 def reset_results() -> None:
@@ -555,7 +559,7 @@ with tab2:
                 # ---- Mode selector ----
                 mode = st.radio(
                     "Action",
-                    options=["Edit existing row", "Add new row"],
+                    options=["Edit existing row", "Add new row", "Delete row"],
                     key="fr_mode",
                     horizontal=True,
                 )
@@ -752,7 +756,7 @@ with tab2:
                 # ================================================
                 # Mode B -- Add new row
                 # ================================================
-                else:
+                elif mode == "Add new row":
                     st.caption(
                         "Load the sheet's column structure, fill in values for the new row, "
                         "then add it to the bottom of the sheet in every selected folder."
@@ -906,6 +910,169 @@ with tab2:
                                 f"{len(fails)} failed."
                             )
                         for r in fr_add_result:
+                            if r["ok"]:
+                                st.markdown(f"+ `{r['folder']}`")
+                            else:
+                                st.markdown(
+                                    f"x `{r['folder']}`: {r.get('error', 'Unknown error')}"
+                                )
+
+                # ================================================
+                # Mode C -- Delete row
+                # ================================================
+                elif mode == "Delete row":
+                    st.number_input(
+                        "Row number",
+                        min_value=1,
+                        value=int(st.session_state.fr_row_number),
+                        step=1,
+                        key="fr_del_row_number_input",
+                        help="1-based row position of the row to delete.",
+                    )
+
+                    load_del_row_clicked = st.button(
+                        "Load Row",
+                        type="secondary",
+                        key="fr_load_del_row",
+                    )
+
+                    if load_del_row_clicked:
+                        row_num = int(st.session_state.fr_del_row_number_input)
+                        ref_sheet = None
+                        ref_folder_name = None
+                        for fname in selected_folders:
+                            for sref in sheets_by_folder.get(fname, []):
+                                if "/".join(sref.rel_path) == selected_sheet_path:
+                                    ref_sheet = sref
+                                    ref_folder_name = fname
+                                    break
+                            if ref_sheet:
+                                break
+
+                        if ref_sheet is None:
+                            st.error("Selected sheet not found in any of the chosen folders.")
+                        else:
+                            try:
+                                with st.spinner(
+                                    f"Loading row {row_num} from "
+                                    f"'{ref_folder_name}/{selected_sheet_path}'..."
+                                ):
+                                    client = smartsheet.Smartsheet(api_token)
+                                    client.errors_as_exceptions(True)
+                                    row_data, col_name_to_id, col_names_ordered, _ = (
+                                        sync.fetch_row_by_number(
+                                            client, ref_sheet.sheet_id, row_num
+                                        )
+                                    )
+                                st.session_state.fr_del_loaded_row = row_data
+                                st.session_state.fr_del_col_names = col_names_ordered
+                                st.session_state.fr_del_row_number = row_num
+                                st.session_state.fr_del_confirm = False
+                                st.session_state.fr_del_result = None
+                            except ValueError as e:
+                                st.error(str(e))
+                            except smartsheet.exceptions.ApiError as e:
+                                st.error(f"Smartsheet API error: {e}")
+                            except Exception as e:
+                                st.error(f"Failed to load row: {e}")
+
+                    del_loaded_row = st.session_state.get("fr_del_loaded_row")
+                    del_col_names = st.session_state.get("fr_del_col_names", [])
+
+                    if del_loaded_row is not None:
+                        row_num_del = st.session_state.get("fr_del_row_number", "?")
+                        st.subheader(f"Row {row_num_del} -- {selected_sheet_path}")
+                        st.caption("This row will be deleted from every selected folder. Review its contents below.")
+
+                        for col_name in del_col_names:
+                            val = del_loaded_row.cells_by_col_name.get(col_name, "")
+                            st.text_input(
+                                col_name,
+                                value=str(val) if val is not None else "",
+                                disabled=True,
+                                key=f"fr_del_preview_{col_name}",
+                            )
+
+                        st.divider()
+                        st.warning(
+                            f"Deleting row {row_num_del} from **{len(selected_folders)} folder(s)**. "
+                            "This cannot be undone (Smartsheet keeps row history but bulk recovery is painful)."
+                        )
+
+                        del_label = (
+                            f"Delete row {row_num_del} from {len(selected_folders)} folder(s)"
+                            if len(selected_folders) > 1
+                            else f"Delete row {row_num_del} from '{selected_folders[0]}'"
+                        )
+                        del_clicked = st.button(
+                            del_label,
+                            type="primary",
+                            key="fr_delete_row",
+                        )
+
+                        if del_clicked:
+                            results = []
+                            try:
+                                client = smartsheet.Smartsheet(api_token)
+                                client.errors_as_exceptions(True)
+                                progress = st.progress(0.0, text="Deleting...")
+
+                                for idx, fname in enumerate(selected_folders):
+                                    target_sheet = None
+                                    for sref in sheets_by_folder.get(fname, []):
+                                        if "/".join(sref.rel_path) == selected_sheet_path:
+                                            target_sheet = sref
+                                            break
+
+                                    if target_sheet is None:
+                                        results.append({
+                                            "ok": False,
+                                            "folder": fname,
+                                            "error": "Sheet not found in this folder.",
+                                        })
+                                        progress.progress((idx + 1) / len(selected_folders))
+                                        continue
+
+                                    try:
+                                        sync.delete_row_by_number(
+                                            client,
+                                            target_sheet.sheet_id,
+                                            int(st.session_state.fr_del_row_number),
+                                        )
+                                        results.append({"ok": True, "folder": fname})
+                                    except Exception as e:
+                                        results.append({
+                                            "ok": False,
+                                            "folder": fname,
+                                            "error": str(e),
+                                        })
+
+                                    progress.progress((idx + 1) / len(selected_folders))
+
+                                progress.empty()
+                            except Exception as e:
+                                st.error(f"Unexpected error: {e}")
+
+                            st.session_state.fr_del_result = results
+                            st.session_state.fr_del_loaded_row = None
+                            st.session_state.fr_del_col_names = []
+                            st.rerun()
+
+                    fr_del_result = st.session_state.get("fr_del_result")
+                    if fr_del_result:
+                        st.divider()
+                        fails = [r for r in fr_del_result if not r["ok"]]
+                        row_num_done = st.session_state.get("fr_del_row_number", "?")
+                        if not fails:
+                            st.success(f"Row {row_num_done} deleted from {len(fr_del_result)} folder(s).")
+                        elif len(fails) == len(fr_del_result):
+                            st.error(f"All {len(fr_del_result)} delete(s) failed.")
+                        else:
+                            st.warning(
+                                f"{len(fr_del_result) - len(fails)} succeeded / "
+                                f"{len(fails)} failed."
+                            )
+                        for r in fr_del_result:
                             if r["ok"]:
                                 st.markdown(f"+ `{r['folder']}`")
                             else:

@@ -444,6 +444,20 @@ def fetch_sheet_columns(
     return col_name_to_id, col_names_ordered, col_name_to_type, col_name_to_editable
 
 
+def delete_row_by_number(client, sheet_id: int, row_number: int) -> None:
+    """Delete one row (1-based position) from a sheet."""
+    sheet = client.Sheets.get_sheet(sheet_id)
+    rows = sheet.rows or []
+    if not rows:
+        raise ValueError("Sheet has no rows.")
+    if row_number < 1 or row_number > len(rows):
+        raise ValueError(
+            f"Row {row_number} is out of range (sheet has {len(rows)} rows)."
+        )
+    row_id = rows[row_number - 1].id
+    client.Sheets.delete_rows(sheet_id, [row_id])
+
+
 def add_row_to_sheet(
     client,
     sheet_id: int,
