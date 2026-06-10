@@ -101,6 +101,17 @@ def fetch_sheet(client, sheet_id: int):
     return sheet, col_name_to_id, col_id_to_name, primary
 
 
+def column_is_editable(col) -> bool:
+    """A column can be written to unless it's a system column or formula column."""
+    # System columns (Auto Number, Created/Modified Date/By) are read-only.
+    if getattr(col, "system_column_type", None):
+        return False
+    # Formula columns are computed and can't be set directly.
+    if getattr(col, "formula", None):
+        return False
+    return True
+
+
 def row_to_data(row, col_id_to_name: Dict[int, str]) -> RowData:
     cells: Dict[str, object] = {}
     for cell in (row.cells or []):
@@ -352,10 +363,10 @@ def list_sheets_in_folder(client, folder_id: int) -> List[SheetRef]:
 
 def fetch_row_by_number(
     client, sheet_id: int, row_number: int
-) -> Tuple[RowData, Dict[str, int], List[str]]:
+) -> Tuple[RowData, Dict[str, int], List[str], Dict[str, bool]]:
     """Fetch one row by 1-based position.
 
-    Returns (row_data, col_name_to_id, ordered_col_names).
+    Returns (row_data, col_name_to_id, ordered_col_names, col_name_to_editable).
     """
     sheet, col_name_to_id, col_id_to_name, _ = fetch_sheet(client, sheet_id)
     rows = sheet.rows or []
@@ -368,7 +379,8 @@ def fetch_row_by_number(
     row = rows[row_number - 1]
     row_data = row_to_data(row, col_id_to_name)
     col_names_ordered = [c.title for c in sheet.columns]
-    return row_data, col_name_to_id, col_names_ordered
+    col_name_to_editable = {c.title: column_is_editable(c) for c in sheet.columns}
+    return row_data, col_name_to_id, col_names_ordered, col_name_to_editable
 
 
 def update_row_cells(
@@ -378,15 +390,20 @@ def update_row_cells(
     col_name_to_id: Dict[str, int],
     updates: Dict[str, str],
     col_name_to_type: Optional[Dict[str, str]] = None,
+    col_name_to_editable: Optional[Dict[str, bool]] = None,
 ) -> None:
     """Write cell updates to a row. Only sends columns with actual content.
 
-    Converts values to appropriate types (e.g., string "true"/"false" -> boolean for CHECKBOX).
+    Skips system/formula columns and converts values to appropriate types
+    (e.g., string "true"/"false" -> boolean for CHECKBOX).
     """
     row = smartsheet.models.Row()
     row.id = row_id
     for col_name, new_value in updates.items():
         if col_name not in col_name_to_id:
+            continue
+        # Never write to system or formula columns.
+        if col_name_to_editable is not None and not col_name_to_editable.get(col_name, True):
             continue
         val = (new_value or "").strip()
         if not val:
@@ -409,12 +426,13 @@ def update_row_cells(
 
 def fetch_sheet_columns(
     client, sheet_id: int
-) -> Tuple[Dict[str, int], List[str], Dict[str, str]]:
-    """Return (col_name_to_id, ordered_col_names, col_name_to_type)."""
+) -> Tuple[Dict[str, int], List[str], Dict[str, str], Dict[str, bool]]:
+    """Return (col_name_to_id, ordered_col_names, col_name_to_type, col_name_to_editable)."""
     sheet, col_name_to_id, _, _ = fetch_sheet(client, sheet_id)
     col_names_ordered = [c.title for c in sheet.columns]
     col_name_to_type = {c.title: c.type for c in sheet.columns}
-    return col_name_to_id, col_names_ordered, col_name_to_type
+    col_name_to_editable = {c.title: column_is_editable(c) for c in sheet.columns}
+    return col_name_to_id, col_names_ordered, col_name_to_type, col_name_to_editable
 
 
 def add_row_to_sheet(
@@ -422,18 +440,33 @@ def add_row_to_sheet(
     sheet_id: int,
     col_name_to_id: Dict[str, int],
     values: Dict[str, str],
+    col_name_to_type: Optional[Dict[str, str]] = None,
+    col_name_to_editable: Optional[Dict[str, bool]] = None,
 ) -> None:
-    """Append a new row at the bottom of a sheet. Blank values are skipped."""
+    """Append a new row at the bottom of a sheet. Blank values are skipped.
+
+    Skips system/formula columns and converts CHECKBOX values to booleans.
+    """
     row = smartsheet.models.Row()
     row.to_bottom = True
     for col_name, value in values.items():
         if col_name not in col_name_to_id:
             continue
-        if not (value and value.strip()):
+        # Never write to system or formula columns.
+        if col_name_to_editable is not None and not col_name_to_editable.get(col_name, True):
+            continue
+        val = (value or "").strip()
+        if not val:
             continue
         cell = smartsheet.models.Cell()
         cell.column_id = col_name_to_id[col_name]
-        cell.value = value
+
+        col_type = col_name_to_type.get(col_name) if col_name_to_type else None
+        if col_type == "CHECKBOX":
+            cell.value = val.lower() in ("true", "1", "yes", "checked")
+        else:
+            cell.value = val
+
         row.cells.append(cell)
     if row.cells:
         client.Sheets.add_rows(sheet_id, [row])
