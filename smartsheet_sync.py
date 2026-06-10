@@ -334,3 +334,59 @@ def _stringify(v):
 
 def _stringify_values(d: Dict[str, object]) -> Dict[str, str]:
     return {k: _stringify(v) for k, v in d.items()}
+
+
+# ----------------------------- Row Editor helpers -----------------------------
+
+def list_workspace_folders(client, workspace_id: int) -> List[Tuple[str, int]]:
+    """Return [(folder_name, folder_id), ...] for every top-level folder in the workspace."""
+    ws = client.Workspaces.get_workspace(workspace_id)
+    return [(f.name, f.id) for f in (ws.folders or [])]
+
+
+def list_sheets_in_folder(client, folder_id: int) -> List[SheetRef]:
+    """Return a flat list of all SheetRefs in a folder tree."""
+    folder = client.Folders.get_folder(folder_id)
+    return walk_folder(client, folder, tuple())
+
+
+def fetch_row_by_number(
+    client, sheet_id: int, row_number: int
+) -> Tuple[RowData, Dict[str, int], List[str]]:
+    """Fetch one row by 1-based position.
+
+    Returns (row_data, col_name_to_id, ordered_col_names).
+    """
+    sheet, col_name_to_id, col_id_to_name, _ = fetch_sheet(client, sheet_id)
+    rows = sheet.rows or []
+    if not rows:
+        raise ValueError("Sheet has no rows.")
+    if row_number < 1 or row_number > len(rows):
+        raise ValueError(
+            f"Row {row_number} is out of range (sheet has {len(rows)} rows)."
+        )
+    row = rows[row_number - 1]
+    row_data = row_to_data(row, col_id_to_name)
+    col_names_ordered = [c.title for c in sheet.columns]
+    return row_data, col_name_to_id, col_names_ordered
+
+
+def update_row_cells(
+    client,
+    sheet_id: int,
+    row_id: int,
+    col_name_to_id: Dict[str, int],
+    updates: Dict[str, str],
+) -> None:
+    """Write cell updates to a row. An empty string clears the cell."""
+    row = smartsheet.models.Row()
+    row.id = row_id
+    for col_name, new_value in updates.items():
+        if col_name not in col_name_to_id:
+            continue
+        cell = smartsheet.models.Cell()
+        cell.column_id = col_name_to_id[col_name]
+        cell.value = new_value if (new_value and new_value.strip()) else None
+        row.cells.append(cell)
+    if row.cells:
+        client.Sheets.update_rows(sheet_id, [row])
