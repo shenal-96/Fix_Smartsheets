@@ -378,15 +378,18 @@ def update_row_cells(
     col_name_to_id: Dict[str, int],
     updates: Dict[str, str],
 ) -> None:
-    """Write cell updates to a row. An empty string clears the cell."""
+    """Write cell updates to a row. Only updates columns with non-empty values."""
     row = smartsheet.models.Row()
     row.id = row_id
     for col_name, new_value in updates.items():
         if col_name not in col_name_to_id:
             continue
+        # Skip columns with empty/blank values to avoid API errors
+        if not (new_value and new_value.strip()):
+            continue
         cell = smartsheet.models.Cell()
         cell.column_id = col_name_to_id[col_name]
-        cell.value = new_value if (new_value and new_value.strip()) else None
+        cell.value = new_value
         row.cells.append(cell)
     if row.cells:
         client.Sheets.update_rows(sheet_id, [row])
