@@ -107,10 +107,15 @@ _READONLY_SYSTEM_COLUMN_TYPES = frozenset({
 
 
 def column_is_editable(col) -> bool:
-    """A column is read-only only if it is a known Smartsheet system column type."""
-    system_type = getattr(col, "system_column_type", None)
+    """A column is read-only if it is a system column or has a column formula."""
+    # Column-formula columns are computed and reject direct cell edits (error 1302).
+    # `formula` is a plain string: None/empty for normal columns.
+    if getattr(col, "formula", None):
+        return False
+    # System columns (Auto Number, Created/Modified Date/By) are read-only.
     # The SDK exposes system_column_type as an EnumeratedValue (unhashable),
-    # so normalise to a plain string before comparing.
+    # so normalise to a plain string before the set-membership check.
+    system_type = getattr(col, "system_column_type", None)
     if system_type is None:
         return True
     return str(system_type) not in _READONLY_SYSTEM_COLUMN_TYPES
