@@ -247,7 +247,7 @@ instance_columns = [c.strip() for c in instance_columns_text.split("\n") if c.st
 # ============================================================
 # Tabs
 # ============================================================
-tab1, tab2 = st.tabs(["Checklist Sync", "Row Editor"])
+tab2, tab1 = st.tabs(["Row Editor", "Checklist Sync"])
 
 
 # ============================================================
