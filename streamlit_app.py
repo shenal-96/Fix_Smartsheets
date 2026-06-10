@@ -105,6 +105,8 @@ def init_state() -> None:
     st.session_state.setdefault("fr_add_col_name_to_id", {})
     st.session_state.setdefault("fr_add_result", None)
     st.session_state.setdefault("fr_col_name_to_type", {})
+    st.session_state.setdefault("fr_col_name_to_editable", {})
+    st.session_state.setdefault("fr_add_col_name_to_editable", {})
 
 
 def reset_results() -> None:
@@ -602,7 +604,7 @@ with tab2:
                                 ):
                                     client = smartsheet.Smartsheet(api_token)
                                     client.errors_as_exceptions(True)
-                                    row_data, col_name_to_id, col_names_ordered = (
+                                    row_data, col_name_to_id, col_names_ordered, col_editable = (
                                         sync.fetch_row_by_number(
                                             client, ref_sheet.sheet_id, row_num
                                         )
@@ -610,6 +612,7 @@ with tab2:
                                 st.session_state.fr_loaded_row = row_data
                                 st.session_state.fr_loaded_col_names = col_names_ordered
                                 st.session_state.fr_col_name_to_id = col_name_to_id
+                                st.session_state.fr_col_name_to_editable = col_editable
                                 st.session_state.fr_row_number = row_num
                                 st.session_state.fr_apply_result = None
                                 for col_name in col_names_ordered:
@@ -632,14 +635,18 @@ with tab2:
                             f"Row {st.session_state.fr_row_number} -- {selected_sheet_path}"
                         )
                         st.caption(
-                            "Edit the values below. Leave a field blank to clear that cell."
+                            "Edit the values below. Leave a field blank to clear that cell. "
+                            "System and formula columns are read-only and won't be changed."
                         )
 
+                        col_editable_map = st.session_state.get("fr_col_name_to_editable", {})
                         edited_values: dict = {}
                         for col_name in col_names:
+                            is_editable = col_editable_map.get(col_name, True)
                             edited_values[col_name] = st.text_input(
-                                col_name,
+                                col_name if is_editable else f"{col_name} (read-only)",
                                 key=f"fr_cell_{col_name}",
+                                disabled=not is_editable,
                             )
 
                         st.divider()
@@ -679,15 +686,17 @@ with tab2:
                                         continue
 
                                     try:
-                                        target_row_data, target_col_name_to_id, _ = (
+                                        target_row_data, target_col_name_to_id, _, _ = (
                                             sync.fetch_row_by_number(
                                                 client,
                                                 target_sheet.sheet_id,
                                                 int(st.session_state.fr_row_number),
                                             )
                                         )
-                                        _, _, target_col_name_to_type = sync.fetch_sheet_columns(
-                                            client, target_sheet.sheet_id
+                                        _, _, target_col_name_to_type, target_col_editable = (
+                                            sync.fetch_sheet_columns(
+                                                client, target_sheet.sheet_id
+                                            )
                                         )
                                         sync.update_row_cells(
                                             client,
@@ -696,6 +705,7 @@ with tab2:
                                             target_col_name_to_id,
                                             edited_values,
                                             target_col_name_to_type,
+                                            target_col_editable,
                                         )
                                         results.append({"ok": True, "folder": fname})
                                     except Exception as e:
@@ -776,7 +786,7 @@ with tab2:
                                 ):
                                     client = smartsheet.Smartsheet(api_token)
                                     client.errors_as_exceptions(True)
-                                    col_name_to_id, col_names_ordered, col_name_to_type = (
+                                    col_name_to_id, col_names_ordered, col_name_to_type, col_editable = (
                                         sync.fetch_sheet_columns(
                                             client, ref_sheet.sheet_id
                                         )
@@ -784,6 +794,7 @@ with tab2:
                                 st.session_state.fr_add_col_names = col_names_ordered
                                 st.session_state.fr_add_col_name_to_id = col_name_to_id
                                 st.session_state.fr_col_name_to_type = col_name_to_type
+                                st.session_state.fr_add_col_name_to_editable = col_editable
                                 st.session_state.fr_add_result = None
                                 for col_name in col_names_ordered:
                                     st.session_state[f"fr_new_{col_name}"] = ""
@@ -797,14 +808,18 @@ with tab2:
                     if add_col_names:
                         st.subheader(f"New row -- {selected_sheet_path}")
                         st.caption(
-                            "Fill in the values for the new row. Blank fields will be skipped."
+                            "Fill in the values for the new row. Blank fields will be skipped. "
+                            "System and formula columns are read-only and won't be set."
                         )
 
+                        add_editable_map = st.session_state.get("fr_add_col_name_to_editable", {})
                         new_values: dict = {}
                         for col_name in add_col_names:
+                            is_editable = add_editable_map.get(col_name, True)
                             new_values[col_name] = st.text_input(
-                                col_name,
+                                col_name if is_editable else f"{col_name} (read-only)",
                                 key=f"fr_new_{col_name}",
+                                disabled=not is_editable,
                             )
 
                         st.divider()
@@ -844,7 +859,12 @@ with tab2:
                                         continue
 
                                     try:
-                                        target_col_name_to_id, _, _ = sync.fetch_sheet_columns(
+                                        (
+                                            target_col_name_to_id,
+                                            _,
+                                            target_col_name_to_type,
+                                            target_col_editable,
+                                        ) = sync.fetch_sheet_columns(
                                             client, target_sheet.sheet_id
                                         )
                                         sync.add_row_to_sheet(
@@ -852,6 +872,8 @@ with tab2:
                                             target_sheet.sheet_id,
                                             target_col_name_to_id,
                                             new_values,
+                                            target_col_name_to_type,
+                                            target_col_editable,
                                         )
                                         results.append({"ok": True, "folder": fname})
                                     except Exception as e:
