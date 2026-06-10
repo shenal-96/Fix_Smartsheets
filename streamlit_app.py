@@ -48,6 +48,7 @@ def init_state() -> None:
         "confirm_apply": False,
         "apply_result": None,
         # Pre-populate config fields from secrets if available
+        "cfg_api_token": get_secret("SMARTSHEET_API_TOKEN", ""),
         "cfg_workspace_id": str(get_secret("DEFAULT_WORKSPACE_ID", "")),
         "cfg_templates_folder": "Templates",
         "cfg_instance_columns": "Check Status\nSigned Off By\nDate Completed\nComments",
@@ -119,13 +120,13 @@ with st.sidebar:
     st.divider()
 
     st.markdown("### Connection")
-    api_token = st.text_input(
+    st.text_input(
         "Smartsheet API token",
         type="password",
-        value=get_secret("SMARTSHEET_API_TOKEN", ""),
-        help="Generate in Smartsheet: Account → Personal Settings → API Access. "
-             "Not stored — entered each session.",
+        key="cfg_api_token",
+        help="Generate in Smartsheet: Account → Personal Settings → API Access.",
     )
+    api_token = st.session_state.cfg_api_token
 
     st.markdown("### Project")
     workspace_id = st.text_input(
