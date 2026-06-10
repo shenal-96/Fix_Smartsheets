@@ -1,1 +1,3 @@
 __pycache__/
+.streamlit/secrets.toml
+.streamlit/user_prefs.json

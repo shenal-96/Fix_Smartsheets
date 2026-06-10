@@ -9,6 +9,8 @@ Local run (only needed for development):
   streamlit run streamlit_app.py
 """
 
+import json
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -16,6 +18,34 @@ import streamlit as st
 import smartsheet
 
 import smartsheet_sync as sync
+
+# ============================================================
+# Local prefs — persist token + workspace ID across page refreshes
+# ============================================================
+_PREFS_PATH = os.path.join(os.path.dirname(__file__), ".streamlit", "user_prefs.json")
+
+
+def _load_prefs() -> dict:
+    try:
+        with open(_PREFS_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_prefs() -> None:
+    try:
+        os.makedirs(os.path.dirname(_PREFS_PATH), exist_ok=True)
+        with open(_PREFS_PATH, "w") as f:
+            json.dump(
+                {
+                    "api_token": st.session_state.get("cfg_api_token", ""),
+                    "workspace_id": st.session_state.get("cfg_workspace_id", ""),
+                },
+                f,
+            )
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -41,22 +71,31 @@ def get_secret(key: str, default: str = "") -> str:
 
 
 def init_state() -> None:
-    defaults = {
-        "plans": [],               # list of SheetPlan from last scan
-        "scan_data": None,         # serialized form for display
-        "scan_timestamp": None,
-        "confirm_apply": False,
-        "apply_result": None,
-        # Pre-populate config fields from secrets if available
-        "cfg_api_token": get_secret("SMARTSHEET_API_TOKEN", ""),
-        "cfg_workspace_id": str(get_secret("DEFAULT_WORKSPACE_ID", "")),
-        "cfg_templates_folder": "Templates",
-        "cfg_instance_columns": "Check Status\nSigned Off By\nDate Completed\nComments",
-        "cfg_key_column": "",
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+    if "plans" in st.session_state:
+        return  # already initialised this session
+
+    prefs = _load_prefs()
+
+    # Priority: saved prefs > Streamlit secrets > empty
+    st.session_state.cfg_api_token = (
+        prefs.get("api_token") or get_secret("SMARTSHEET_API_TOKEN", "")
+    )
+    # Priority: URL param > saved prefs > Streamlit secrets > empty
+    st.session_state.cfg_workspace_id = (
+        st.query_params.get("wid", "")
+        or prefs.get("workspace_id", "")
+        or str(get_secret("DEFAULT_WORKSPACE_ID", ""))
+    )
+    st.session_state.cfg_templates_folder = "Templates"
+    st.session_state.cfg_instance_columns = (
+        "Check Status\nSigned Off By\nDate Completed\nComments"
+    )
+    st.session_state.cfg_key_column = ""
+    st.session_state.plans = []
+    st.session_state.scan_data = None
+    st.session_state.scan_timestamp = None
+    st.session_state.confirm_apply = False
+    st.session_state.apply_result = None
 
 
 def reset_results() -> None:
@@ -124,16 +163,24 @@ with st.sidebar:
         "Smartsheet API token",
         type="password",
         key="cfg_api_token",
+        on_change=_save_prefs,
         help="Generate in Smartsheet: Account → Personal Settings → API Access.",
     )
     api_token = st.session_state.cfg_api_token
 
     st.markdown("### Project")
-    workspace_id = st.text_input(
+    st.text_input(
         "Workspace ID",
         key="cfg_workspace_id",
+        on_change=_save_prefs,
         help="The project workspace ID. Right-click workspace in Smartsheet → Properties.",
     )
+    workspace_id = st.session_state.cfg_workspace_id
+    # Keep workspace ID in the URL so the page can be bookmarked / refreshed
+    if workspace_id.strip():
+        st.query_params["wid"] = workspace_id.strip()
+    elif "wid" in st.query_params:
+        del st.query_params["wid"]
 
     with st.expander("Advanced settings", expanded=False):
         templates_folder = st.text_input(
