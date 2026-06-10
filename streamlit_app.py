@@ -107,6 +107,8 @@ def init_state() -> None:
     st.session_state.setdefault("fr_col_name_to_type", {})
     st.session_state.setdefault("fr_col_name_to_editable", {})
     st.session_state.setdefault("fr_add_col_name_to_editable", {})
+    st.session_state.setdefault("fr_add_position", "Bottom of sheet")
+    st.session_state.setdefault("fr_add_sibling_row_number", 1)
     st.session_state.setdefault("fr_del_loaded_row", None)
     st.session_state.setdefault("fr_del_col_names", [])
     st.session_state.setdefault("fr_del_row_number", 1)
@@ -759,7 +761,7 @@ with tab2:
                 elif mode == "Add new row":
                     st.caption(
                         "Load the sheet's column structure, fill in values for the new row, "
-                        "then add it to the bottom of the sheet in every selected folder."
+                        "choose where it should be inserted, then add it in every selected folder."
                     )
 
                     load_cols_clicked = st.button(
@@ -828,6 +830,45 @@ with tab2:
 
                         st.divider()
 
+                        st.subheader("Where should the row go?")
+                        add_position = st.radio(
+                            "Insert position",
+                            options=[
+                                "Bottom of sheet",
+                                "Top of sheet",
+                                "Above a specific row",
+                                "Below a specific row",
+                            ],
+                            key="fr_add_position",
+                        )
+
+                        sibling_row_number = None
+                        if add_position in ("Above a specific row", "Below a specific row"):
+                            sibling_row_number = int(
+                                st.number_input(
+                                    "Row number",
+                                    min_value=1,
+                                    value=int(st.session_state.fr_add_sibling_row_number),
+                                    step=1,
+                                    key="fr_add_sibling_row_number",
+                                    help=(
+                                        "1-based row position. The new row will be inserted "
+                                        f"{'above' if add_position.startswith('Above') else 'below'} "
+                                        "this row in every selected folder."
+                                    ),
+                                )
+                            )
+
+                        position_map = {
+                            "Bottom of sheet": "bottom",
+                            "Top of sheet": "top",
+                            "Above a specific row": "above",
+                            "Below a specific row": "below",
+                        }
+                        position_arg = position_map[add_position]
+
+                        st.divider()
+
                         add_label = (
                             f"Add row to {len(selected_folders)} folder(s)"
                             if len(selected_folders) > 1
@@ -878,6 +919,8 @@ with tab2:
                                             new_values,
                                             target_col_name_to_type,
                                             target_col_editable,
+                                            position=position_arg,
+                                            sibling_row_number=sibling_row_number,
                                         )
                                         results.append({"ok": True, "folder": fname})
                                     except Exception as e:
