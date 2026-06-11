@@ -34,6 +34,19 @@ import streamlit_authenticator as stauth
 from streamlit_authenticator.utilities.validator import Validator
 from cryptography.fernet import Fernet, InvalidToken
 
+# ------------------------------------------------------------------
+# Relax password rules globally.
+#
+# streamlit-authenticator's default Validator enforces an 8-20 char
+# password with upper/lower/digit/symbol. We want short numeric
+# passcodes (e.g. a 4-6 digit PIN). The library also has a bug where
+# AuthenticationController ignores any validator passed to
+# Authenticate() and hardcodes its own Validator(), so patching the
+# class method itself is the only reliable override.
+# ------------------------------------------------------------------
+Validator.validate_password = lambda self, password: len(password or "") >= 4
+
+
 # ============================================================
 # Paths
 # ============================================================
@@ -206,16 +219,6 @@ def save_user_secrets(
 
 
 # ============================================================
-# Permissive validator for passcodes
-# ============================================================
-class PermissiveValidator(Validator):
-    """Allow any password 4+ characters with no complexity requirements."""
-
-    def validate_password(self, password: str) -> bool:
-        return len(password) >= 4
-
-
-# ============================================================
 # Login gate (public)
 # ============================================================
 def require_login(get_secret: Callable[[str, str], str]):
@@ -239,10 +242,6 @@ def require_login(get_secret: Callable[[str, str], str]):
         cookie_key,
         cookie_expiry_days=7,
     )
-    # NOTE: streamlit-authenticator's AuthenticationController hardcodes its own
-    # default Validator() and ignores the one passed to Authenticate(), so we
-    # override it directly here to allow short numeric passcodes.
-    authenticator.authentication_controller.validator = PermissiveValidator()
 
     authenticator.login(location="main")
     status = st.session_state.get("authentication_status")
