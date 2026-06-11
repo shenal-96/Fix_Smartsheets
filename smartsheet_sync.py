@@ -6,8 +6,9 @@ Used by both the CLI (sync_checklist.py) and the web app (app.py).
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import smartsheet
 
@@ -75,9 +76,15 @@ def walk_folder(client, folder, rel_path: Tuple[str, ...]) -> List[SheetRef]:
 
 
 def get_workspace_layout(
-    client, workspace_id: int, templates_folder_name: str
+    client, workspace_id: int, templates_folder_name: str,
+    client_factory: Optional[Callable[[], "smartsheet.Smartsheet"]] = None,
 ) -> Tuple[List[SheetRef], List[Tuple[str, List[SheetRef]]]]:
-    """Returns (template_sheets, [(generator_folder_name, [sheets]) ...])."""
+    """Returns (template_sheets, [(generator_folder_name, [sheets]) ...]).
+
+    If ``client_factory`` is given, generator folders are walked in parallel,
+    each thread using its own client (the SDK client is not thread-safe).
+    Without it, folders are walked serially using the passed ``client``.
+    """
     ws = _api_call(client.Workspaces.get_workspace, workspace_id)
 
     templates_folder = None
@@ -100,10 +107,19 @@ def get_workspace_layout(
     tf_full = _api_call(client.Folders.get_folder, templates_folder.id)
     template_sheets = walk_folder(client, tf_full, tuple())
 
-    generators = []
-    for gf in generator_folders:
-        gf_full = _api_call(client.Folders.get_folder, gf.id)
-        generators.append((gf.name, walk_folder(client, gf_full, tuple())))
+    if client_factory and len(generator_folders) > 1:
+        def _walk_gen(gf):
+            c = client_factory()
+            gf_full = _api_call(c.Folders.get_folder, gf.id)
+            return (gf.name, walk_folder(c, gf_full, tuple()))
+
+        with ThreadPoolExecutor(max_workers=min(len(generator_folders), 8)) as executor:
+            generators = list(executor.map(_walk_gen, generator_folders))
+    else:
+        generators = []
+        for gf in generator_folders:
+            gf_full = _api_call(client.Folders.get_folder, gf.id)
+            generators.append((gf.name, walk_folder(client, gf_full, tuple())))
 
     return template_sheets, generators
 

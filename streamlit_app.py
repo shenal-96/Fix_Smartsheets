@@ -338,8 +338,14 @@ with tab1:
                 client = smartsheet.Smartsheet(api_token)
                 client.errors_as_exceptions(True)
 
+                def _make_client():
+                    c = smartsheet.Smartsheet(api_token)
+                    c.errors_as_exceptions(True)
+                    return c
+
                 template_sheets, generators = sync.get_workspace_layout(
                     client, workspace_id_int, templates_folder.strip() or "Templates",
+                    client_factory=_make_client,
                 )
                 plans, warnings = sync.build_plans(
                     client, template_sheets, generators,
