@@ -209,12 +209,10 @@ def save_user_secrets(
 # Permissive validator for passcodes
 # ============================================================
 class PermissiveValidator(Validator):
-    """Allow short passcodes like 4-6 digits with no complexity requirements."""
+    """Allow any password 4+ characters with no complexity requirements."""
 
-    def validate_password(self, password: str) -> tuple[bool, str]:
-        if len(password) < 4:
-            return False, "Password must be at least 4 characters."
-        return True, ""
+    def validate_password(self, password: str) -> bool:
+        return len(password) >= 4
 
 
 # ============================================================
