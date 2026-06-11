@@ -165,7 +165,11 @@ def _connect():
         import psycopg2
         from psycopg2.extras import RealDictCursor
 
-        conn = psycopg2.connect(_database_url(), cursor_factory=RealDictCursor)
+        # connect_timeout caps how long a misconfigured / unreachable DATABASE_URL
+        # can block the page load (otherwise psycopg2 hangs on the TCP connect).
+        conn = psycopg2.connect(
+            _database_url(), cursor_factory=RealDictCursor, connect_timeout=10
+        )
         try:
             yield _ConnWrapper(conn, is_pg=True)
             conn.commit()
@@ -191,7 +195,15 @@ def _connect():
             conn.close()
 
 
+# Tables only need creating once per process; reruns re-import nothing, so this
+# module-level flag skips the round trip on every subsequent page load.
+_db_ready = False
+
+
 def _init_db() -> None:
+    global _db_ready
+    if _db_ready:
+        return
     with _connect() as conn:
         conn.execute(
             """
@@ -215,6 +227,7 @@ def _init_db() -> None:
             )
             """
         )
+    _db_ready = True
 
 
 def _load_credentials() -> dict:
@@ -228,6 +241,14 @@ def _load_credentials() -> dict:
                 "password": row["password_hash"],
             }
     return creds
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_credentials() -> dict:
+    """Process-wide cache of the user table so login does not re-query Postgres
+    on every rerun. Cleared by ``_persist_new_registrations`` when a user signs
+    up so the new account is immediately loadable."""
+    return _load_credentials()
 
 
 def _upsert_user(username: str, name: str, email: str, password_hash: str) -> None:
@@ -315,7 +336,7 @@ def require_login(get_secret: Callable[[str, str], str]):
         or "checklist-sync-dev-cookie-key-change-me"
     )
 
-    credentials = _load_credentials()
+    credentials = _cached_credentials()
     authenticator = stauth.Authenticate(
         credentials,
         "checklist_sync_auth",
@@ -340,8 +361,10 @@ def require_login(get_secret: Callable[[str, str], str]):
             authenticator.register_user(
                 location="main", pre_authorization=False, captcha=False
             )
-            # register_user mutated `credentials` in place on success; persist it.
+            # register_user mutated `credentials` in place on success; persist it
+            # and drop the cache so the new user is reloaded from the DB next run.
             _persist_new_registrations(credentials)
+            _cached_credentials.clear()
         except Exception as e:  # registration validation errors surface here
             st.error(str(e))
 
