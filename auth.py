@@ -233,14 +233,16 @@ def require_login(get_secret: Callable[[str, str], str]):
     )
 
     credentials = _load_credentials()
-    validator = PermissiveValidator()
     authenticator = stauth.Authenticate(
         credentials,
         "checklist_sync_auth",
         cookie_key,
         cookie_expiry_days=7,
-        validator=validator,
     )
+    # NOTE: streamlit-authenticator's AuthenticationController hardcodes its own
+    # default Validator() and ignores the one passed to Authenticate(), so we
+    # override it directly here to allow short numeric passcodes.
+    authenticator.authentication_controller.validator = PermissiveValidator()
 
     authenticator.login(location="main")
     status = st.session_state.get("authentication_status")
