@@ -132,6 +132,7 @@ init_state()
 st.markdown(
     """
     <style>
+    /* ---- Light mode (default) ---- */
     .stApp { background-color: #F6F2E8; }
     h1 { font-weight: 600 !important; letter-spacing: -0.02em; }
     h2, h3 { letter-spacing: -0.01em; }
@@ -148,6 +149,47 @@ st.markdown(
     div.stButton > button[kind="primary"] { background-color: #234E7A; border-color: #234E7A; }
     div.stButton > button[kind="primary"]:hover { background-color: #16365A; border-color: #16365A; }
     .scan-meta { color: #6F7585; font-family: monospace; font-size: 0.8rem; padding-top: 12px; }
+    .subtitle-text { color: #6F7585; }
+
+    /* ---- Dark mode overrides ---- */
+    @media (prefers-color-scheme: dark) {
+        .stApp { background-color: #12141F !important; }
+        section[data-testid="stSidebar"] { background-color: #1B1E2D !important; border-right: 1px solid #2E3247 !important; }
+        .stTextInput input, .stTextArea textarea, .stSelectbox > div > div { background-color: #252838 !important; color: #E8E6F0 !important; border-color: #3E4460 !important; }
+        .stTextInput label, .stTextArea label, .stSelectbox label { color: #C8C5D8 !important; }
+        .diff-add    { background: #0D2217 !important; color: #66BB8A !important; border-left-color: #66BB8A !important; }
+        .diff-update { background: #231A08 !important; color: #D4985A !important; border-left-color: #D4985A !important; }
+        .diff-delete { background: #23090E !important; color: #D45D72 !important; border-left-color: #D45D72 !important; }
+        .diff-detail { color: #9BA3B8 !important; }
+        .diff-detail .old { color: #D45D72 !important; }
+        .diff-detail .new { color: #66BB8A !important; }
+        .diff-detail .col { color: #7B83A0 !important; }
+        .scan-meta { color: #9BA3B8 !important; }
+        .subtitle-text { color: #9BA3B8 !important; }
+        div.stButton > button[kind="primary"] { background-color: #3A6FB0 !important; border-color: #3A6FB0 !important; }
+        div.stButton > button[kind="primary"]:hover { background-color: #2D5A96 !important; border-color: #2D5A96 !important; }
+    }
+
+    /* Streamlit's own dark theme toggle (saves to localStorage, uses [data-theme]) */
+    [data-theme="dark"] .stApp { background-color: #12141F !important; }
+    [data-theme="dark"] section[data-testid="stSidebar"] { background-color: #1B1E2D !important; border-right: 1px solid #2E3247 !important; }
+    [data-theme="dark"] .stTextInput input,
+    [data-theme="dark"] .stTextArea textarea,
+    [data-theme="dark"] .stSelectbox > div > div { background-color: #252838 !important; color: #E8E6F0 !important; border-color: #3E4460 !important; }
+    [data-theme="dark"] .stTextInput label,
+    [data-theme="dark"] .stTextArea label,
+    [data-theme="dark"] .stSelectbox label { color: #C8C5D8 !important; }
+    [data-theme="dark"] .diff-add    { background: #0D2217 !important; color: #66BB8A !important; border-left-color: #66BB8A !important; }
+    [data-theme="dark"] .diff-update { background: #231A08 !important; color: #D4985A !important; border-left-color: #D4985A !important; }
+    [data-theme="dark"] .diff-delete { background: #23090E !important; color: #D45D72 !important; border-left-color: #D45D72 !important; }
+    [data-theme="dark"] .diff-detail { color: #9BA3B8 !important; }
+    [data-theme="dark"] .diff-detail .old { color: #D45D72 !important; }
+    [data-theme="dark"] .diff-detail .new { color: #66BB8A !important; }
+    [data-theme="dark"] .diff-detail .col { color: #7B83A0 !important; }
+    [data-theme="dark"] .scan-meta { color: #9BA3B8 !important; }
+    [data-theme="dark"] .subtitle-text { color: #9BA3B8 !important; }
+    [data-theme="dark"] div.stButton > button[kind="primary"] { background-color: #3A6FB0 !important; border-color: #3A6FB0 !important; }
+    [data-theme="dark"] div.stButton > button[kind="primary"]:hover { background-color: #2D5A96 !important; border-color: #2D5A96 !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -221,7 +263,7 @@ with st.sidebar:
 # ============================================================
 st.title("SmartSheets Editor")
 st.markdown(
-    '<p style="color:#6F7585;margin-top:-12px;">'
+    '<p class="subtitle-text" style="margin-top:-12px;">'
     "Making SmartSheets smart again, multiple sheets at a time. Your welcome!"
     "</p>",
     unsafe_allow_html=True,
