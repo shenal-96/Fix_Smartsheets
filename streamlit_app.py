@@ -107,6 +107,9 @@ def reset_results() -> None:
     st.session_state.scan_timestamp = None
     st.session_state.confirm_apply = False
     st.session_state.apply_result = None
+    # Drop any per-sheet selection checkbox state from a previous scan.
+    for k in [k for k in st.session_state if k.startswith("sel_")]:
+        del st.session_state[k]
 
 
 # ============================================================
@@ -343,6 +346,9 @@ with tab1:
                     "generator_count": len(generators),
                     "generator_folders": [name for name, _ in generators],
                 }
+                # Every sheet starts selected; the user can untick before applying.
+                for i in range(len(plans)):
+                    st.session_state[f"sel_{i}"] = True
                 st.session_state.scan_timestamp = datetime.now()
         except smartsheet.exceptions.ApiError as e:
             st.error(f"Smartsheet API error: {e}")
@@ -378,6 +384,19 @@ with tab1:
         else:
             st.divider()
             st.subheader("Preview")
+            st.caption("Untick any sheet you want to leave out before applying.")
+
+            sel_col1, sel_col2, _ = st.columns([1, 1, 6])
+            with sel_col1:
+                if st.button("Select all", use_container_width=True):
+                    for p in plans_serialized:
+                        st.session_state[f"sel_{p['id']}"] = True
+                    st.rerun()
+            with sel_col2:
+                if st.button("Select none", use_container_width=True):
+                    for p in plans_serialized:
+                        st.session_state[f"sel_{p['id']}"] = False
+                    st.rerun()
 
             groups: dict = {}
             for p in plans_serialized:
@@ -388,8 +407,12 @@ with tab1:
                 for p in sheets_in_folder:
                     counts = p["counts"]
                     summary = f"`+{counts['add']}` `~{counts['update']}` `-{counts['delete']}`"
+                    st.checkbox(
+                        f"Include **{p['generator_path']}**  {summary}",
+                        key=f"sel_{p['id']}",
+                    )
                     with st.expander(
-                        f"**{p['generator_path']}**  .  {summary}",
+                        "Details",
                         expanded=(len(sheets_in_folder) == 1 and len(groups) == 1),
                     ):
                         st.caption(f"Key column: `{p['key_column']}`")
@@ -436,13 +459,32 @@ with tab1:
             st.divider()
             st.subheader("Apply")
 
+            # Only sheets left ticked in the preview are applied.
+            selected_ids = {
+                p["id"] for p in plans_serialized
+                if st.session_state.get(f"sel_{p['id']}", True)
+            }
+            sel_adds = sum(p["counts"]["add"] for p in plans_serialized if p["id"] in selected_ids)
+            sel_updates = sum(p["counts"]["update"] for p in plans_serialized if p["id"] in selected_ids)
+            sel_deletes = sum(p["counts"]["delete"] for p in plans_serialized if p["id"] in selected_ids)
+            n_selected = len(selected_ids)
+
             if not st.session_state.confirm_apply:
-                st.markdown(
-                    f"Ready to write **+{total_adds} adds / ~{total_updates} updates / "
-                    f"-{total_deletes} deletes** across **{len(plans_serialized)} sheet(s)**. "
-                    "Instance columns will not be touched."
-                )
-                if st.button("Apply changes", type="primary", use_container_width=False):
+                if n_selected == 0:
+                    st.warning("No sheets selected. Tick at least one sheet above to apply changes.")
+                else:
+                    st.markdown(
+                        f"Ready to write **+{sel_adds} adds / ~{sel_updates} updates / "
+                        f"-{sel_deletes} deletes** across **{n_selected} of "
+                        f"{len(plans_serialized)} sheet(s)**. "
+                        "Instance columns will not be touched."
+                    )
+                if st.button(
+                    "Apply changes",
+                    type="primary",
+                    use_container_width=False,
+                    disabled=(n_selected == 0),
+                ):
                     st.session_state.confirm_apply = True
                     st.rerun()
             else:
@@ -458,7 +500,10 @@ with tab1:
                         try:
                             client = smartsheet.Smartsheet(api_token)
                             client.errors_as_exceptions(True)
-                            plans_list = st.session_state.plans
+                            plans_list = [
+                                plan for i, plan in enumerate(st.session_state.plans)
+                                if i in selected_ids
+                            ]
                             for i, plan in enumerate(plans_list):
                                 label = (
                                     f"{plan.generator_folder} / "
