@@ -31,6 +31,7 @@ from typing import Callable, Optional, Tuple
 
 import streamlit as st
 import streamlit_authenticator as stauth
+from streamlit_authenticator.utilities.validator import Validator
 from cryptography.fernet import Fernet, InvalidToken
 
 # ============================================================
@@ -205,6 +206,18 @@ def save_user_secrets(
 
 
 # ============================================================
+# Permissive validator for passcodes
+# ============================================================
+class PermissiveValidator(Validator):
+    """Allow short passcodes like 4-6 digits with no complexity requirements."""
+
+    def validate_password(self, password: str) -> tuple[bool, str]:
+        if len(password) < 4:
+            return False, "Password must be at least 4 characters."
+        return True, ""
+
+
+# ============================================================
 # Login gate (public)
 # ============================================================
 def require_login(get_secret: Callable[[str, str], str]):
@@ -222,11 +235,13 @@ def require_login(get_secret: Callable[[str, str], str]):
     )
 
     credentials = _load_credentials()
+    validator = PermissiveValidator()
     authenticator = stauth.Authenticate(
         credentials,
         "checklist_sync_auth",
         cookie_key,
         cookie_expiry_days=7,
+        validator=validator,
     )
 
     authenticator.login(location="main")
