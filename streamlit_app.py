@@ -590,9 +590,18 @@ with tab2:
                 client = smartsheet.Smartsheet(api_token)
                 client.errors_as_exceptions(True)
                 folders = sync.list_workspace_folders(client, workspace_id_int)
+
+                def _list_one(folder):
+                    fname, fid = folder
+                    _client = smartsheet.Smartsheet(api_token)
+                    _client.errors_as_exceptions(True)
+                    return fname, sync.list_sheets_in_folder(_client, fid)
+
                 sheets_by_folder: dict = {}
-                for fname, fid in folders:
-                    sheets_by_folder[fname] = sync.list_sheets_in_folder(client, fid)
+                if folders:
+                    with ThreadPoolExecutor(max_workers=min(len(folders), 8)) as executor:
+                        for fname, sheets in executor.map(_list_one, folders):
+                            sheets_by_folder[fname] = sheets
             st.session_state.fr_folders_list = folders
             st.session_state.fr_sheets_by_folder = sheets_by_folder
             st.session_state.fr_loaded_row = None
