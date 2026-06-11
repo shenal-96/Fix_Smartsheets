@@ -5,10 +5,27 @@ templates to generator copies. Importable; no printing, no argv parsing.
 Used by both the CLI (sync_checklist.py) and the web app (app.py).
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import smartsheet
+
+
+def _api_call(fn, *args, **kwargs):
+    """Call fn(*args, **kwargs), retrying up to 5 times on 429 rate-limit errors."""
+    delay = 2
+    for attempt in range(6):
+        try:
+            return fn(*args, **kwargs)
+        except smartsheet.exceptions.ApiError as exc:
+            result = getattr(getattr(exc, "error", None), "result", None)
+            status = getattr(result, "status_code", None) or getattr(result, "statusCode", None)
+            if status == 429 and attempt < 5:
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+            else:
+                raise
 
 
 # ----------------------------- Data classes -----------------------------
@@ -52,7 +69,7 @@ def walk_folder(client, folder, rel_path: Tuple[str, ...]) -> List[SheetRef]:
             sheets.append(SheetRef(s.id, s.name, rel_path + (s.name,)))
     if folder.folders:
         for sub in folder.folders:
-            sub_full = client.Folders.get_folder(sub.id)
+            sub_full = _api_call(client.Folders.get_folder, sub.id)
             sheets.extend(walk_folder(client, sub_full, rel_path + (sub.name,)))
     return sheets
 
@@ -61,7 +78,7 @@ def get_workspace_layout(
     client, workspace_id: int, templates_folder_name: str
 ) -> Tuple[List[SheetRef], List[Tuple[str, List[SheetRef]]]]:
     """Returns (template_sheets, [(generator_folder_name, [sheets]) ...])."""
-    ws = client.Workspaces.get_workspace(workspace_id)
+    ws = _api_call(client.Workspaces.get_workspace, workspace_id)
 
     templates_folder = None
     generator_folders = []
@@ -80,12 +97,12 @@ def get_workspace_layout(
             f"No generator folders found in workspace {workspace_id} (only '{templates_folder_name}' exists)."
         )
 
-    tf_full = client.Folders.get_folder(templates_folder.id)
+    tf_full = _api_call(client.Folders.get_folder, templates_folder.id)
     template_sheets = walk_folder(client, tf_full, tuple())
 
     generators = []
     for gf in generator_folders:
-        gf_full = client.Folders.get_folder(gf.id)
+        gf_full = _api_call(client.Folders.get_folder, gf.id)
         generators.append((gf.name, walk_folder(client, gf_full, tuple())))
 
     return template_sheets, generators
@@ -94,7 +111,7 @@ def get_workspace_layout(
 # ----------------------------- Sheet reading -----------------------------
 
 def fetch_sheet(client, sheet_id: int):
-    sheet = client.Sheets.get_sheet(sheet_id)
+    sheet = _api_call(client.Sheets.get_sheet, sheet_id)
     col_name_to_id = {c.title: c.id for c in sheet.columns}
     col_id_to_name = {c.id: c.title for c in sheet.columns}
     primary = next((c.title for c in sheet.columns if c.primary), None)
@@ -281,7 +298,7 @@ def apply_plan(client, plan: SheetPlan) -> None:
                     row.cells.append(cell)
             new_rows.append(row)
         for batch in _chunked(new_rows, 200):
-            client.Sheets.add_rows(sheet_id, batch)
+            _api_call(client.Sheets.add_rows, sheet_id, batch)
 
     if plan.rows_to_update:
         upd = []
@@ -296,12 +313,12 @@ def apply_plan(client, plan: SheetPlan) -> None:
                     row.cells.append(cell)
             upd.append(row)
         for batch in _chunked(upd, 200):
-            client.Sheets.update_rows(sheet_id, batch)
+            _api_call(client.Sheets.update_rows, sheet_id, batch)
 
     if plan.rows_to_delete:
         ids = [r.row_id for r in plan.rows_to_delete]
         for batch in _chunked(ids, 200):
-            client.Sheets.delete_rows(sheet_id, batch)
+            _api_call(client.Sheets.delete_rows, sheet_id, batch)
 
 
 # ----------------------------- Serialization for web UI -----------------------------
@@ -360,13 +377,13 @@ def _stringify_values(d: Dict[str, object]) -> Dict[str, str]:
 
 def list_workspace_folders(client, workspace_id: int) -> List[Tuple[str, int]]:
     """Return [(folder_name, folder_id), ...] for every top-level folder in the workspace."""
-    ws = client.Workspaces.get_workspace(workspace_id)
+    ws = _api_call(client.Workspaces.get_workspace, workspace_id)
     return [(f.name, f.id) for f in (ws.folders or [])]
 
 
 def list_sheets_in_folder(client, folder_id: int) -> List[SheetRef]:
     """Return a flat list of all SheetRefs in a folder tree."""
-    folder = client.Folders.get_folder(folder_id)
+    folder = _api_call(client.Folders.get_folder, folder_id)
     return walk_folder(client, folder, tuple())
 
 
@@ -430,7 +447,7 @@ def update_row_cells(
 
         row.cells.append(cell)
     if row.cells:
-        client.Sheets.update_rows(sheet_id, [row])
+        _api_call(client.Sheets.update_rows, sheet_id, [row])
 
 
 def fetch_sheet_columns(
@@ -446,7 +463,7 @@ def fetch_sheet_columns(
 
 def delete_row_by_number(client, sheet_id: int, row_number: int) -> None:
     """Delete one row (1-based position) from a sheet."""
-    sheet = client.Sheets.get_sheet(sheet_id)
+    sheet = _api_call(client.Sheets.get_sheet, sheet_id)
     rows = sheet.rows or []
     if not rows:
         raise ValueError("Sheet has no rows.")
@@ -455,7 +472,7 @@ def delete_row_by_number(client, sheet_id: int, row_number: int) -> None:
             f"Row {row_number} is out of range (sheet has {len(rows)} rows)."
         )
     row_id = rows[row_number - 1].id
-    client.Sheets.delete_rows(sheet_id, [row_id])
+    _api_call(client.Sheets.delete_rows, sheet_id, [row_id])
 
 
 def add_row_to_sheet(
@@ -487,7 +504,7 @@ def add_row_to_sheet(
             raise ValueError(
                 "sibling_row_number is required when position is 'above' or 'below'."
             )
-        sheet = client.Sheets.get_sheet(sheet_id)
+        sheet = _api_call(client.Sheets.get_sheet, sheet_id)
         rows = sheet.rows or []
         if not rows:
             raise ValueError("Sheet has no rows to position relative to.")
@@ -523,7 +540,7 @@ def add_row_to_sheet(
 
         row.cells.append(cell)
     if row.cells:
-        client.Sheets.add_rows(sheet_id, [row])
+        _api_call(client.Sheets.add_rows, sheet_id, [row])
 
 
 # ----------------------------- Large workspace copy -----------------------------
