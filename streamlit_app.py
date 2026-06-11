@@ -77,6 +77,9 @@ def init_state(username: str) -> None:
         st.session_state.scan_timestamp = None
         st.session_state.confirm_apply = False
         st.session_state.apply_result = None
+        # Cached list of (workspace_name, workspace_id) from "Scan workspaces".
+        # Cleared per-user so a new sign-in never sees the prior token's list.
+        st.session_state.ws_list = None
         st.session_state._session_username = username
 
     # Row Editor / Add Row state -- safe to call on every rerun via setdefault
@@ -107,6 +110,9 @@ def init_state(username: str) -> None:
 
     # New Generator tab
     st.session_state.setdefault("ng_result", None)
+
+    # Workspace picker cache (populated by the "Scan workspaces" button).
+    st.session_state.setdefault("ws_list", None)
 
 
 def reset_results() -> None:
@@ -223,14 +229,56 @@ with st.sidebar:
     api_token = st.session_state.cfg_api_token
 
     st.markdown("### Project")
-    st.text_input(
-        "Workspace ID",
-        key="cfg_workspace_id",
-        on_change=save_user_prefs,
-        help="The project workspace ID. Right-click workspace in Smartsheet -> Properties.",
-    )
-    workspace_id = st.session_state.cfg_workspace_id
-    if workspace_id.strip():
+
+    # Scan for every workspace this API token can access, so the user can pick
+    # one by name instead of pasting a raw workspace ID.
+    if st.button(
+        "Scan workspaces",
+        use_container_width=True,
+        disabled=not api_token,
+        help="List every workspace your API token can access, then pick one by name below.",
+    ):
+        try:
+            with st.spinner("Loading workspaces..."):
+                _ws_client = smartsheet.Smartsheet(api_token)
+                st.session_state.ws_list = sync.list_workspaces(_ws_client)
+            if not st.session_state.ws_list:
+                st.warning("No workspaces found for this API token.")
+        except Exception as e:  # noqa: BLE001 - surface any API/auth error to the user
+            st.session_state.ws_list = None
+            st.error(f"Could not load workspaces: {e}")
+
+    ws_list = st.session_state.get("ws_list")
+    current_id = str(st.session_state.get("cfg_workspace_id", "")).strip()
+
+    if ws_list:
+        id_to_name = {str(wid): name for name, wid in ws_list}
+        options = [str(wid) for _, wid in ws_list]
+        default_index = options.index(current_id) if current_id in options else 0
+        chosen = st.selectbox(
+            "Workspace",
+            options=options,
+            index=default_index,
+            format_func=lambda wid: id_to_name.get(wid, wid),
+            help="Pick a workspace by name. Type in the box to search.",
+        )
+        if chosen and chosen != current_id:
+            st.session_state.cfg_workspace_id = chosen
+            save_user_prefs()
+        workspace_id = chosen or ""
+        st.caption(f"Workspace ID: `{workspace_id}`")
+    else:
+        workspace_id = st.text_input(
+            "Workspace ID",
+            value=current_id,
+            help="Click 'Scan workspaces' above to choose by name, or paste an ID "
+            "(right-click workspace in Smartsheet -> Properties).",
+        )
+        if workspace_id.strip() != current_id:
+            st.session_state.cfg_workspace_id = workspace_id.strip()
+            save_user_prefs()
+
+    if workspace_id and workspace_id.strip():
         st.query_params["wid"] = workspace_id.strip()
     elif "wid" in st.query_params:
         del st.query_params["wid"]

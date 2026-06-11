@@ -58,7 +58,7 @@ Watch the deployment log. First deploy takes 2–3 minutes (it builds a containe
 ### Step 3 — Use it
 
 1. In the sidebar, paste your Smartsheet API token (Smartsheet → Account → Personal Settings → API Access → generate a new token).
-2. Enter the project workspace ID (right-click workspace in Smartsheet → Properties).
+2. Click **Scan workspaces** to list every workspace your API token can access, then pick the one you want by name from the dropdown (type in the box to search). You can still paste a workspace ID manually if you prefer (right-click workspace in Smartsheet → Properties).
 3. The default instance columns are pre-loaded — adjust if your column names are different.
 4. Click **Scan workspace**. You'll see the preview.
 5. Review. If it looks right, click **Apply changes** → confirm.

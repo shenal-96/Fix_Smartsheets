@@ -453,6 +453,35 @@ def create_generator_from_templates(
     return _copy_folder_contents(client, tf_full, new_folder_id)
 
 
+# ----------------------------- Workspace discovery -----------------------------
+
+def list_workspaces(client) -> List[Tuple[str, int]]:
+    """Return [(workspace_name, workspace_id), ...] for every workspace the
+    API token can access, sorted by name (case-insensitive).
+
+    Lets the UI offer a searchable picker instead of asking the user to paste a
+    raw workspace ID.
+    """
+    result: List[Tuple[str, int]] = []
+    try:
+        # SDK 3.x: one call with include_all returns every workspace.
+        resp = _api_call(client.Workspaces.list_workspaces, include_all=True)
+        for w in (getattr(resp, "data", None) or []):
+            result.append((w.name, w.id))
+    except TypeError:
+        # SDK 4.x dropped include_all in favour of token-based pagination.
+        last_key = None
+        while True:
+            resp = _api_call(client.Workspaces.list_workspaces, last_key=last_key)
+            for w in (getattr(resp, "data", None) or []):
+                result.append((w.name, w.id))
+            last_key = getattr(resp, "last_key", None)
+            if not last_key:
+                break
+    result.sort(key=lambda t: (t[0] or "").lower())
+    return result
+
+
 # ----------------------------- Row Editor helpers -----------------------------
 
 def list_workspace_folders(client, workspace_id: int) -> List[Tuple[str, int]]:
