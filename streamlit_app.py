@@ -100,6 +100,9 @@ def init_state(username: str) -> None:
     st.session_state.setdefault("cw_report", None)
     st.session_state.setdefault("cw_log", [])
 
+    # New Generator tab
+    st.session_state.setdefault("ng_result", None)
+
 
 def reset_results() -> None:
     st.session_state.plans = []
@@ -289,7 +292,9 @@ instance_columns = [c.strip() for c in instance_columns_text.split("\n") if c.st
 # ============================================================
 # Tabs
 # ============================================================
-tab2, tab1, tab3 = st.tabs(["Row Editor", "Checklist Sync", "Copy Workspace"])
+tab2, tab1, tab3, tab4 = st.tabs(
+    ["Row Editor", "Checklist Sync", "Copy Workspace", "New Generator"]
+)
 
 
 # ============================================================
@@ -1380,3 +1385,60 @@ with tab3:
         with st.expander(f"{len(report.copied)} item(s) copied"):
             for item in report.copied:
                 st.markdown(f"- `{item}`")
+
+
+# ============================================================
+# Tab 4 -- New Generator (copy templates into a new folder)
+# ============================================================
+with tab4:
+    st.markdown(
+        "Creates a new generator folder in your workspace by copying every sheet "
+        "from the **Templates** folder (preserving subfolder structure). "
+        "Use this to onboard a new project or client."
+    )
+    st.divider()
+
+    new_folder_name = st.text_input(
+        "New folder name",
+        placeholder="e.g. Acme Corp",
+        key="ng_folder_name",
+        help="Must be unique within the workspace.",
+    )
+
+    create_clicked = st.button(
+        "Create generator folder",
+        type="primary",
+        disabled=not new_folder_name.strip(),
+        key="ng_create",
+    )
+
+    if create_clicked:
+        st.session_state.ng_result = None
+        folder_name = new_folder_name.strip()
+        try:
+            with st.spinner(f"Copying templates into '{folder_name}'..."):
+                client = smartsheet.Smartsheet(api_token)
+                client.errors_as_exceptions(True)
+                sheets_copied = sync.create_generator_from_templates(
+                    client,
+                    workspace_id_int,
+                    templates_folder.strip() or "Templates",
+                    folder_name,
+                )
+            st.session_state.ng_result = {"ok": True, "name": folder_name, "count": sheets_copied}
+        except smartsheet.exceptions.ApiError as e:
+            st.session_state.ng_result = {"ok": False, "error": f"Smartsheet API error: {e}"}
+        except RuntimeError as e:
+            st.session_state.ng_result = {"ok": False, "error": str(e)}
+        except Exception as e:
+            st.session_state.ng_result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        st.rerun()
+
+    ng_result = st.session_state.ng_result
+    if ng_result:
+        if ng_result["ok"]:
+            st.success(
+                f"Created **{ng_result['name']}** with {ng_result['count']} sheet(s) copied from Templates."
+            )
+        else:
+            st.error(ng_result["error"])

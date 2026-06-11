@@ -373,6 +373,70 @@ def _stringify_values(d: Dict[str, object]) -> Dict[str, str]:
     return {k: _stringify(v) for k, v in d.items()}
 
 
+# ----------------------------- New generator (copy templates) -----------------------------
+
+def _copy_folder_contents(client, source_folder, dest_folder_id: int) -> int:
+    """Recursively copy sheets and subfolders from source into dest_folder_id.
+
+    Returns the total number of sheets copied.
+    """
+    count = 0
+    for sheet in source_folder.sheets or []:
+        dest = smartsheet.models.ContainerDestination()
+        dest.destination_type = "folder"
+        dest.destination_id = dest_folder_id
+        dest.new_name = sheet.name
+        _api_call(client.Sheets.copy_sheet, sheet.id, dest)
+        count += 1
+
+    for subfolder in source_folder.folders or []:
+        new_sub = smartsheet.models.Folder()
+        new_sub.name = subfolder.name
+        result = _api_call(client.Folders.create_folder, dest_folder_id, new_sub)
+        new_sub_id = result.result.id
+
+        full_sub = _api_call(client.Folders.get_folder, subfolder.id)
+        count += _copy_folder_contents(client, full_sub, new_sub_id)
+
+    return count
+
+
+def create_generator_from_templates(
+    client,
+    workspace_id: int,
+    templates_folder_name: str,
+    new_folder_name: str,
+) -> int:
+    """Create a new generator folder by copying the Templates folder structure.
+
+    Returns the number of sheets copied.
+    """
+    ws = _api_call(client.Workspaces.get_workspace, workspace_id)
+
+    templates_folder = next(
+        (f for f in (ws.folders or []) if f.name == templates_folder_name), None
+    )
+    if templates_folder is None:
+        raise RuntimeError(
+            f"No folder named '{templates_folder_name}' found in workspace {workspace_id}."
+        )
+
+    # Check for name collision
+    existing_names = {f.name for f in (ws.folders or [])}
+    if new_folder_name in existing_names:
+        raise RuntimeError(
+            f"A folder named '{new_folder_name}' already exists in this workspace."
+        )
+
+    new_folder = smartsheet.models.Folder()
+    new_folder.name = new_folder_name
+    result = _api_call(client.Workspaces.create_folder, workspace_id, new_folder)
+    new_folder_id = result.result.id
+
+    tf_full = _api_call(client.Folders.get_folder, templates_folder.id)
+    return _copy_folder_contents(client, tf_full, new_folder_id)
+
+
 # ----------------------------- Row Editor helpers -----------------------------
 
 def list_workspace_folders(client, workspace_id: int) -> List[Tuple[str, int]]:
