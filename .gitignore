@@ -1,3 +1,5 @@
 __pycache__/
 .streamlit/secrets.toml
 .streamlit/user_prefs.json
+.streamlit/users.db
+.streamlit/fernet.key

@@ -9,8 +9,6 @@ Local run (only needed for development):
   streamlit run streamlit_app.py
 """
 
-import json
-import os
 from datetime import datetime
 from typing import Optional
 
@@ -18,35 +16,7 @@ import streamlit as st
 import smartsheet
 
 import smartsheet_sync as sync
-
-# ============================================================
-# Local prefs -- persist token + workspace ID across page refreshes
-# ============================================================
-_PREFS_PATH = os.path.join(os.path.dirname(__file__), ".streamlit", "user_prefs.json")
-
-
-def _load_prefs() -> dict:
-    try:
-        with open(_PREFS_PATH) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_prefs() -> None:
-    try:
-        os.makedirs(os.path.dirname(_PREFS_PATH), exist_ok=True)
-        with open(_PREFS_PATH, "w") as f:
-            json.dump(
-                {
-                    "api_token": st.session_state.get("cfg_api_token", ""),
-                    "workspace_id": st.session_state.get("cfg_workspace_id", ""),
-                },
-                f,
-            )
-    except Exception:
-        pass
-
+import auth
 
 # ============================================================
 # Page config
@@ -70,16 +40,27 @@ def get_secret(key: str, default: str = "") -> str:
         return default
 
 
-def init_state() -> None:
-    if "plans" not in st.session_state:
-        prefs = _load_prefs()
+def save_user_prefs() -> None:
+    """Persist the logged-in user's own (encrypted) token + workspace."""
+    username = st.session_state.get("auth_username")
+    if not username:
+        return
+    auth.save_user_secrets(
+        username,
+        st.session_state.get("cfg_api_token", ""),
+        st.session_state.get("cfg_workspace_id", ""),
+        get_secret,
+    )
 
-        st.session_state.cfg_api_token = (
-            prefs.get("api_token") or get_secret("SMARTSHEET_API_TOKEN", "")
-        )
+
+def init_state(username: str) -> None:
+    if "plans" not in st.session_state:
+        stored_token, stored_workspace = auth.load_user_secrets(username, get_secret)
+
+        st.session_state.cfg_api_token = stored_token
         st.session_state.cfg_workspace_id = (
             st.query_params.get("wid", "")
-            or prefs.get("workspace_id", "")
+            or stored_workspace
             or str(get_secret("DEFAULT_WORKSPACE_ID", ""))
         )
         st.session_state.cfg_templates_folder = "Templates"
@@ -123,7 +104,13 @@ def reset_results() -> None:
     st.session_state.apply_result = None
 
 
-init_state()
+# ============================================================
+# Authentication -- each user signs in and uses their OWN API key
+# ============================================================
+authenticator, username = auth.require_login(get_secret)
+st.session_state.auth_username = username
+
+init_state(username)
 
 
 # ============================================================
@@ -160,14 +147,19 @@ st.markdown(
 with st.sidebar:
     st.markdown("## SmartSheets Editor")
     st.caption("Smartsheet master -> generator copies")
+
+    name = st.session_state.get("name", username)
+    st.markdown(f"Signed in as **{name}**")
+    authenticator.logout("Log out", location="sidebar")
     st.divider()
 
     st.markdown("### Connection")
+    st.caption("This is *your* personal Smartsheet API key. It is encrypted and never shared with other users.")
     st.text_input(
         "Smartsheet API token",
         type="password",
         key="cfg_api_token",
-        on_change=_save_prefs,
+        on_change=save_user_prefs,
         help="Generate in Smartsheet: Account -> Personal Settings -> API Access.",
     )
     api_token = st.session_state.cfg_api_token
@@ -176,7 +168,7 @@ with st.sidebar:
     st.text_input(
         "Workspace ID",
         key="cfg_workspace_id",
-        on_change=_save_prefs,
+        on_change=save_user_prefs,
         help="The project workspace ID. Right-click workspace in Smartsheet -> Properties.",
     )
     workspace_id = st.session_state.cfg_workspace_id
