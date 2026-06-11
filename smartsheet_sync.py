@@ -524,3 +524,221 @@ def add_row_to_sheet(
         row.cells.append(cell)
     if row.cells:
         client.Sheets.add_rows(sheet_id, [row])
+
+
+# ----------------------------- Large workspace copy -----------------------------
+#
+# Smartsheet's "Copy Workspace" API refuses workspaces above an item limit.
+# As a workaround we create a fresh empty workspace and copy each top-level
+# folder into it individually (copy_folder copies the whole sub-tree in one
+# call, so each operation stays well under the limit). If a *single* folder is
+# itself too large, we recurse: recreate it empty and copy its children one by
+# one.
+#
+# Caveat (inherent to piecewise copying): cell links / cross-sheet references /
+# dashboards that point ACROSS folders are only re-mapped within a single copy
+# operation, so cross-folder links will still point at the ORIGINAL workspace.
+# Content within any one folder is copied and re-linked correctly.
+
+# What Smartsheet's copy `include` parameter accepts, with friendly labels.
+COPY_INCLUDE_OPTIONS = {
+    "Row data": "data",
+    "Attachments": "attachments",
+    "Comments": "discussions",
+    "Forms": "forms",
+    "Automation rules": "rules",
+    "Cell links": "cellLinks",
+    "Sharing": "shares",
+}
+COPY_INCLUDE_DEFAULT_LABELS = ["Row data", "Attachments", "Comments", "Forms"]
+
+# How deep the recursive "split an oversized folder" fallback will go.
+_MAX_SPLIT_DEPTH = 6
+
+
+@dataclass
+class CopyReport:
+    new_workspace_id: Optional[int] = None
+    new_workspace_name: str = ""
+    permalink: str = ""
+    copied: List[str] = field(default_factory=list)
+    failed: List[Tuple[str, str]] = field(default_factory=list)  # (item, reason)
+    warnings: List[str] = field(default_factory=list)
+
+
+def labels_to_include_tokens(labels: List[str]) -> List[str]:
+    """Map friendly include labels to Smartsheet API tokens."""
+    return [COPY_INCLUDE_OPTIONS[l] for l in labels if l in COPY_INCLUDE_OPTIONS]
+
+
+def _container_dest(dest_type: str, dest_id: int, new_name: Optional[str] = None):
+    cd = smartsheet.models.ContainerDestination()
+    cd.destination_type = dest_type
+    cd.destination_id = dest_id
+    if new_name:
+        cd.new_name = new_name
+    return cd
+
+
+def create_workspace(client, name: str):
+    """Create a new empty workspace and return the Workspace object."""
+    ws = smartsheet.models.Workspace()
+    ws.name = name
+    return client.Workspaces.create_workspace(ws).result
+
+
+def _create_folder(client, dest_type: str, dest_id: int, name: str):
+    folder = smartsheet.models.Folder()
+    folder.name = name
+    if dest_type == "workspace":
+        return client.Workspaces.create_folder_in_workspace(dest_id, folder).result
+    return client.Folders.create_folder_in_folder(dest_id, folder).result
+
+
+def _copy_sheet_into(client, sheet_id, dest_type, dest_id, new_name, include):
+    return client.Sheets.copy_sheet(
+        sheet_id, _container_dest(dest_type, dest_id, new_name), include=include
+    )
+
+
+def _copy_folder_into(client, folder_id, dest_type, dest_id, new_name, include):
+    return client.Folders.copy_folder(
+        folder_id, _container_dest(dest_type, dest_id, new_name), include=include
+    )
+
+
+def _is_size_error(exc) -> bool:
+    """Best-effort detection of the 'copy is too large' API error."""
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in ("maximum", "too large", "exceeds", "too many", "limit")
+    )
+
+
+def summarize_workspace(client, workspace_id: int) -> dict:
+    """Lightweight preview of what a copy would move (one call per top folder)."""
+    ws = client.Workspaces.get_workspace(workspace_id)
+    folder_infos = []
+    total_sheets = len(ws.sheets or [])
+    for f in (ws.folders or []):
+        full = client.Folders.get_folder(f.id)
+        count = len(walk_folder(client, full, tuple()))
+        folder_infos.append((f.name, count))
+        total_sheets += count
+    return {
+        "workspace_name": ws.name,
+        "folders": folder_infos,
+        "top_level_sheets": [s.name for s in (ws.sheets or [])],
+        "top_level_sights": len(ws.sights or []),
+        "top_level_reports": len(ws.reports or []),
+        "total_sheets": total_sheets,
+    }
+
+
+def _copy_folder_with_fallback(
+    client, folder_summary, dest_type, dest_id, include, report, emit, depth=0
+):
+    name = folder_summary.name
+    try:
+        _copy_folder_into(client, folder_summary.id, dest_type, dest_id, name, include)
+        report.copied.append(f"folder: {name}")
+        emit(f"Copied folder '{name}'.")
+        return
+    except Exception as e:
+        if not _is_size_error(e) or depth >= _MAX_SPLIT_DEPTH:
+            report.failed.append((f"folder: {name}", str(e)))
+            emit(f"FAILED folder '{name}': {e}")
+            return
+        emit(f"Folder '{name}' exceeds the copy limit -- splitting into smaller pieces...")
+
+    # Oversized folder: recreate it empty and copy its children individually.
+    try:
+        new_folder = _create_folder(client, dest_type, dest_id, name)
+    except Exception as e:
+        report.failed.append((f"folder: {name} (could not recreate for split)", str(e)))
+        emit(f"FAILED to recreate folder '{name}' for splitting: {e}")
+        return
+
+    full = client.Folders.get_folder(folder_summary.id)
+    for sub in (full.folders or []):
+        _copy_folder_with_fallback(
+            client, sub, "folder", new_folder.id, include, report, emit, depth + 1
+        )
+    for sh in (full.sheets or []):
+        try:
+            _copy_sheet_into(client, sh.id, "folder", new_folder.id, sh.name, include)
+            report.copied.append(f"sheet: {name}/{sh.name}")
+            emit(f"Copied sheet '{name}/{sh.name}'.")
+        except Exception as e:
+            report.failed.append((f"sheet: {name}/{sh.name}", str(e)))
+            emit(f"FAILED sheet '{name}/{sh.name}': {e}")
+    if full.sights:
+        report.warnings.append(
+            f"{len(full.sights)} dashboard(s) in oversized folder '{name}' were not copied individually."
+        )
+    if full.reports:
+        report.warnings.append(
+            f"{len(full.reports)} report(s) in oversized folder '{name}' were not copied individually."
+        )
+
+
+def copy_workspace_piecewise(
+    client,
+    source_workspace_id: int,
+    new_workspace_name: str,
+    include_labels: Optional[List[str]] = None,
+    progress=None,
+) -> CopyReport:
+    """Copy a (large) workspace into a new one, folder by folder.
+
+    `progress` is an optional callable(str) invoked with human-readable status
+    lines as the copy proceeds.
+    """
+    include = labels_to_include_tokens(
+        include_labels if include_labels is not None else COPY_INCLUDE_DEFAULT_LABELS
+    )
+
+    def emit(msg: str) -> None:
+        if progress:
+            progress(msg)
+
+    if not new_workspace_name.strip():
+        raise ValueError("New workspace name is required.")
+
+    ws = client.Workspaces.get_workspace(source_workspace_id)
+    report = CopyReport(new_workspace_name=new_workspace_name.strip())
+
+    new_ws = create_workspace(client, new_workspace_name.strip())
+    report.new_workspace_id = new_ws.id
+    report.permalink = getattr(new_ws, "permalink", "") or ""
+    emit(f"Created new workspace '{report.new_workspace_name}' (id {new_ws.id}).")
+
+    # Top-level folders (each copied as a whole sub-tree, with split fallback).
+    for f in (ws.folders or []):
+        _copy_folder_with_fallback(client, f, "workspace", new_ws.id, include, report, emit)
+
+    # Sheets sitting directly at the workspace root (not inside any folder).
+    for s in (ws.sheets or []):
+        try:
+            _copy_sheet_into(client, s.id, "workspace", new_ws.id, s.name, include)
+            report.copied.append(f"sheet: {s.name}")
+            emit(f"Copied top-level sheet '{s.name}'.")
+        except Exception as e:
+            report.failed.append((f"sheet: {s.name}", str(e)))
+            emit(f"FAILED top-level sheet '{s.name}': {e}")
+
+    # Dashboards/reports living at the workspace root cannot be copied across
+    # workspaces piecewise (those inside folders are handled by copy_folder).
+    if ws.sights:
+        report.warnings.append(
+            f"{len(ws.sights)} dashboard(s) at the workspace root were NOT copied "
+            "(Smartsheet's API can't copy dashboards into a different workspace). Recreate them manually."
+        )
+    if ws.reports:
+        report.warnings.append(
+            f"{len(ws.reports)} report(s) at the workspace root were NOT copied. Recreate them manually."
+        )
+
+    emit("Done.")
+    return report

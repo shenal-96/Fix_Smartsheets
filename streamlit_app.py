@@ -94,6 +94,11 @@ def init_state(username: str) -> None:
     st.session_state.setdefault("fr_del_col_names", [])
     st.session_state.setdefault("fr_del_row_number", 1)
     st.session_state.setdefault("fr_del_result", None)
+    # Copy Workspace state
+    st.session_state.setdefault("cw_preview", None)
+    st.session_state.setdefault("cw_confirm", False)
+    st.session_state.setdefault("cw_report", None)
+    st.session_state.setdefault("cw_log", [])
 
 
 def reset_results() -> None:
@@ -239,7 +244,7 @@ instance_columns = [c.strip() for c in instance_columns_text.split("\n") if c.st
 # ============================================================
 # Tabs
 # ============================================================
-tab2, tab1 = st.tabs(["Row Editor", "Checklist Sync"])
+tab2, tab1, tab3 = st.tabs(["Row Editor", "Checklist Sync", "Copy Workspace"])
 
 
 # ============================================================
@@ -1114,3 +1119,177 @@ with tab2:
                                 st.markdown(
                                     f"x `{r['folder']}`: {r.get('error', 'Unknown error')}"
                                 )
+
+
+# ============================================================
+# Tab 3 -- Copy Workspace (large-workspace, folder-by-folder)
+# ============================================================
+with tab3:
+    st.markdown(
+        "Smartsheet refuses to copy a workspace once it grows past its item limit. "
+        "This copies it **folder by folder** into a brand-new workspace instead, so "
+        "large projects can be duplicated."
+    )
+    st.warning(
+        "Because the copy runs folder by folder, **cell links, cross-sheet "
+        "references, and dashboards that point _across_ folders are not re-linked** "
+        "to the new copy -- they keep pointing at the original. Everything inside a "
+        "single folder is copied and re-linked correctly."
+    )
+
+    cw_src = st.text_input(
+        "Source workspace ID",
+        value=str(workspace_id).strip(),
+        key="cw_src",
+        help="Defaults to the workspace ID from the sidebar. Override to copy a different one.",
+    )
+    cw_name = st.text_input(
+        "New workspace name",
+        key="cw_name",
+        placeholder="e.g. Stage 6 (copy)",
+    )
+    cw_include_labels = st.multiselect(
+        "Include",
+        options=list(sync.COPY_INCLUDE_OPTIONS.keys()),
+        default=sync.COPY_INCLUDE_DEFAULT_LABELS,
+        key="cw_include",
+        help="What to carry over into the copy. 'Sharing' also copies who the sheets are shared with.",
+    )
+
+    def _cw_src_int():
+        try:
+            return int(str(cw_src).strip())
+        except (ValueError, TypeError):
+            return None
+
+    # ---- Preview ----
+    col_p, col_c = st.columns(2)
+    with col_p:
+        preview_clicked = st.button(
+            "Preview source", use_container_width=True, key="cw_preview_btn"
+        )
+    with col_c:
+        copy_clicked = st.button(
+            "Copy workspace",
+            type="primary",
+            use_container_width=True,
+            key="cw_copy_btn",
+            disabled=st.session_state.cw_confirm,
+        )
+
+    if preview_clicked:
+        st.session_state.cw_confirm = False
+        st.session_state.cw_report = None
+        src_id = _cw_src_int()
+        if src_id is None:
+            st.error("Source workspace ID must be a number.")
+        else:
+            try:
+                with st.spinner("Inspecting source workspace..."):
+                    client = smartsheet.Smartsheet(api_token)
+                    client.errors_as_exceptions(True)
+                    st.session_state.cw_preview = sync.summarize_workspace(client, src_id)
+            except smartsheet.exceptions.ApiError as e:
+                st.error(f"Smartsheet API error: {e}")
+            except Exception as e:
+                st.error(f"Preview failed: {type(e).__name__}: {e}")
+
+    if st.session_state.cw_preview:
+        prev = st.session_state.cw_preview
+        st.divider()
+        st.markdown(f"**Source:** `{prev['workspace_name']}`")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Top-level folders", len(prev["folders"]))
+        c2.metric("Sheets (total)", prev["total_sheets"])
+        c3.metric("Top-level sheets", len(prev["top_level_sheets"]))
+        if prev["folders"]:
+            with st.expander("Folders to copy", expanded=False):
+                for fname, fcount in prev["folders"]:
+                    st.markdown(f"- `{fname}` — {fcount} sheet(s)")
+        if prev["top_level_sights"] or prev["top_level_reports"]:
+            st.info(
+                f"{prev['top_level_sights']} dashboard(s) and {prev['top_level_reports']} "
+                "report(s) sit at the workspace root and will NOT be copied. "
+                "(Dashboards/reports inside folders are copied normally.)"
+            )
+
+    # ---- Two-step confirm ----
+    if copy_clicked:
+        src_id = _cw_src_int()
+        if src_id is None:
+            st.error("Source workspace ID must be a number.")
+        elif not str(cw_name).strip():
+            st.error("Enter a name for the new workspace.")
+        else:
+            st.session_state.cw_confirm = True
+
+    if st.session_state.cw_confirm:
+        st.warning(
+            f"This will create a new workspace named **{str(cw_name).strip()}** and copy "
+            "the source into it. This can take a while for large workspaces."
+        )
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            confirm_go = st.button(
+                "Confirm copy", type="primary", use_container_width=True, key="cw_confirm_btn"
+            )
+        with cc2:
+            if st.button("Cancel", use_container_width=True, key="cw_cancel_btn"):
+                st.session_state.cw_confirm = False
+                st.rerun()
+
+        if confirm_go:
+            st.session_state.cw_confirm = False
+            src_id = _cw_src_int()
+            log_box = st.container()
+            lines: list[str] = []
+
+            def _progress(msg: str):
+                lines.append(msg)
+                with log_box:
+                    st.write(msg)
+
+            try:
+                with st.status("Copying workspace...", expanded=True):
+                    client = smartsheet.Smartsheet(api_token)
+                    client.errors_as_exceptions(True)
+                    report = sync.copy_workspace_piecewise(
+                        client,
+                        src_id,
+                        str(cw_name).strip(),
+                        include_labels=cw_include_labels,
+                        progress=_progress,
+                    )
+                st.session_state.cw_report = report
+            except smartsheet.exceptions.ApiError as e:
+                st.error(f"Smartsheet API error: {e}")
+            except Exception as e:
+                st.error(f"Copy failed: {type(e).__name__}: {e}")
+
+    # ---- Report ----
+    report = st.session_state.cw_report
+    if report:
+        st.divider()
+        if report.failed:
+            st.warning(
+                f"Copied {len(report.copied)} item(s), but {len(report.failed)} failed."
+            )
+        else:
+            st.success(f"Copied {len(report.copied)} item(s) successfully.")
+
+        if report.permalink:
+            st.markdown(f"**Open the new workspace:** [{report.new_workspace_name}]({report.permalink})")
+        elif report.new_workspace_id:
+            st.markdown(f"New workspace ID: `{report.new_workspace_id}`")
+
+        if report.failed:
+            with st.expander(f"{len(report.failed)} failure(s)", expanded=True):
+                for item, reason in report.failed:
+                    st.markdown(f"- `{item}` — {reason}")
+        if report.warnings:
+            with st.expander(f"{len(report.warnings)} warning(s)"):
+                for w in report.warnings:
+                    st.markdown(f"- {w}")
+        with st.expander(f"{len(report.copied)} item(s) copied"):
+            for item in report.copied:
+                st.markdown(f"- `{item}`")
