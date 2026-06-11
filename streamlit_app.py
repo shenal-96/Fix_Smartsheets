@@ -9,6 +9,7 @@ Local run (only needed for development):
   streamlit run streamlit_app.py
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
 
@@ -54,7 +55,10 @@ def save_user_prefs() -> None:
 
 
 def init_state(username: str) -> None:
-    if "plans" not in st.session_state:
+    # Re-initialize whenever this is the first load OR the logged-in user changed
+    # (e.g. logout → login in the same browser tab). Without this check, the
+    # previous user's token stays in session state when a new user signs in.
+    if "plans" not in st.session_state or st.session_state.get("_session_username") != username:
         stored_token, stored_workspace = auth.load_user_secrets(username, get_secret)
 
         st.session_state.cfg_api_token = stored_token
@@ -73,6 +77,7 @@ def init_state(username: str) -> None:
         st.session_state.scan_timestamp = None
         st.session_state.confirm_apply = False
         st.session_state.apply_result = None
+        st.session_state._session_username = username
 
     # Row Editor / Add Row state -- safe to call on every rerun via setdefault
     st.session_state.setdefault("fr_folders_list", None)
@@ -333,8 +338,14 @@ with tab1:
                 client = smartsheet.Smartsheet(api_token)
                 client.errors_as_exceptions(True)
 
+                def _make_client():
+                    c = smartsheet.Smartsheet(api_token)
+                    c.errors_as_exceptions(True)
+                    return c
+
                 template_sheets, generators = sync.get_workspace_layout(
                     client, workspace_id_int, templates_folder.strip() or "Templates",
+                    client_factory=_make_client,
                 )
                 plans, warnings = sync.build_plans(
                     client, template_sheets, generators,
@@ -585,9 +596,18 @@ with tab2:
                 client = smartsheet.Smartsheet(api_token)
                 client.errors_as_exceptions(True)
                 folders = sync.list_workspace_folders(client, workspace_id_int)
+
+                def _list_one(folder):
+                    fname, fid = folder
+                    _client = smartsheet.Smartsheet(api_token)
+                    _client.errors_as_exceptions(True)
+                    return fname, sync.list_sheets_in_folder(_client, fid)
+
                 sheets_by_folder: dict = {}
-                for fname, fid in folders:
-                    sheets_by_folder[fname] = sync.list_sheets_in_folder(client, fid)
+                if folders:
+                    with ThreadPoolExecutor(max_workers=min(len(folders), 8)) as executor:
+                        for fname, sheets in executor.map(_list_one, folders):
+                            sheets_by_folder[fname] = sheets
             st.session_state.fr_folders_list = folders
             st.session_state.fr_sheets_by_folder = sheets_by_folder
             st.session_state.fr_loaded_row = None
@@ -760,58 +780,48 @@ with tab2:
                         if apply_clicked:
                             results = []
                             try:
-                                client = smartsheet.Smartsheet(api_token)
-                                client.errors_as_exceptions(True)
                                 progress = st.progress(0.0, text="Applying...")
+                                row_number = int(st.session_state.fr_row_number)
 
-                                for idx, fname in enumerate(selected_folders):
-                                    target_sheet = None
-                                    for sref in sheets_by_folder.get(fname, []):
-                                        if "/".join(sref.rel_path) == selected_sheet_path:
-                                            target_sheet = sref
-                                            break
-
+                                def _edit_one(fname):
+                                    target_sheet = next(
+                                        (s for s in sheets_by_folder.get(fname, [])
+                                         if "/".join(s.rel_path) == selected_sheet_path),
+                                        None,
+                                    )
                                     if target_sheet is None:
-                                        results.append({
-                                            "ok": False,
-                                            "folder": fname,
-                                            "error": "Sheet not found in this folder.",
-                                        })
-                                        progress.progress((idx + 1) / len(selected_folders))
-                                        continue
-
+                                        return {"ok": False, "folder": fname, "error": "Sheet not found in this folder."}
                                     try:
-                                        target_row_data, target_col_name_to_id, _, _ = (
-                                            sync.fetch_row_by_number(
-                                                client,
-                                                target_sheet.sheet_id,
-                                                int(st.session_state.fr_row_number),
-                                            )
+                                        _client = smartsheet.Smartsheet(api_token)
+                                        _client.errors_as_exceptions(True)
+                                        row_data, col_name_to_id, _, _ = sync.fetch_row_by_number(
+                                            _client, target_sheet.sheet_id, row_number
                                         )
-                                        _, _, target_col_name_to_type, target_col_editable = (
-                                            sync.fetch_sheet_columns(
-                                                client, target_sheet.sheet_id
-                                            )
+                                        _, _, col_name_to_type, col_editable = sync.fetch_sheet_columns(
+                                            _client, target_sheet.sheet_id
                                         )
                                         sync.update_row_cells(
-                                            client,
+                                            _client,
                                             target_sheet.sheet_id,
-                                            target_row_data.row_id,
-                                            target_col_name_to_id,
+                                            row_data.row_id,
+                                            col_name_to_id,
                                             edited_values,
-                                            target_col_name_to_type,
-                                            target_col_editable,
+                                            col_name_to_type,
+                                            col_editable,
                                         )
-                                        results.append({"ok": True, "folder": fname})
+                                        return {"ok": True, "folder": fname}
                                     except Exception as e:
-                                        results.append({
-                                            "ok": False,
-                                            "folder": fname,
-                                            "error": str(e),
-                                        })
+                                        return {"ok": False, "folder": fname, "error": str(e)}
 
-                                    progress.progress((idx + 1) / len(selected_folders))
+                                n = len(selected_folders)
+                                results_map = {}
+                                with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+                                    futures = {executor.submit(_edit_one, fname): fname for fname in selected_folders}
+                                    for done, future in enumerate(as_completed(futures), 1):
+                                        results_map[futures[future]] = future.result()
+                                        progress.progress(done / n, text=f"Applying... ({done}/{n})")
 
+                                results = [results_map[fname] for fname in selected_folders]
                                 progress.empty()
                             except Exception as e:
                                 st.error(f"Unexpected error: {e}")
@@ -972,55 +982,45 @@ with tab2:
                         if add_clicked:
                             results = []
                             try:
-                                client = smartsheet.Smartsheet(api_token)
-                                client.errors_as_exceptions(True)
                                 progress = st.progress(0.0, text="Adding rows...")
 
-                                for idx, fname in enumerate(selected_folders):
-                                    target_sheet = None
-                                    for sref in sheets_by_folder.get(fname, []):
-                                        if "/".join(sref.rel_path) == selected_sheet_path:
-                                            target_sheet = sref
-                                            break
-
+                                def _add_one(fname):
+                                    target_sheet = next(
+                                        (s for s in sheets_by_folder.get(fname, [])
+                                         if "/".join(s.rel_path) == selected_sheet_path),
+                                        None,
+                                    )
                                     if target_sheet is None:
-                                        results.append({
-                                            "ok": False,
-                                            "folder": fname,
-                                            "error": "Sheet not found in this folder.",
-                                        })
-                                        progress.progress((idx + 1) / len(selected_folders))
-                                        continue
-
+                                        return {"ok": False, "folder": fname, "error": "Sheet not found in this folder."}
                                     try:
-                                        (
-                                            target_col_name_to_id,
-                                            _,
-                                            target_col_name_to_type,
-                                            target_col_editable,
-                                        ) = sync.fetch_sheet_columns(
-                                            client, target_sheet.sheet_id
+                                        _client = smartsheet.Smartsheet(api_token)
+                                        _client.errors_as_exceptions(True)
+                                        col_name_to_id, _, col_name_to_type, col_editable = sync.fetch_sheet_columns(
+                                            _client, target_sheet.sheet_id
                                         )
                                         sync.add_row_to_sheet(
-                                            client,
+                                            _client,
                                             target_sheet.sheet_id,
-                                            target_col_name_to_id,
+                                            col_name_to_id,
                                             new_values,
-                                            target_col_name_to_type,
-                                            target_col_editable,
+                                            col_name_to_type,
+                                            col_editable,
                                             position=position_arg,
                                             sibling_row_number=sibling_row_number,
                                         )
-                                        results.append({"ok": True, "folder": fname})
+                                        return {"ok": True, "folder": fname}
                                     except Exception as e:
-                                        results.append({
-                                            "ok": False,
-                                            "folder": fname,
-                                            "error": str(e),
-                                        })
+                                        return {"ok": False, "folder": fname, "error": str(e)}
 
-                                    progress.progress((idx + 1) / len(selected_folders))
+                                n = len(selected_folders)
+                                results_map = {}
+                                with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+                                    futures = {executor.submit(_add_one, fname): fname for fname in selected_folders}
+                                    for done, future in enumerate(as_completed(futures), 1):
+                                        results_map[futures[future]] = future.result()
+                                        progress.progress(done / n, text=f"Adding rows... ({done}/{n})")
 
+                                results = [results_map[fname] for fname in selected_folders]
                                 progress.empty()
                             except Exception as e:
                                 st.error(f"Unexpected error: {e}")
@@ -1145,42 +1145,34 @@ with tab2:
                         if del_clicked:
                             results = []
                             try:
-                                client = smartsheet.Smartsheet(api_token)
-                                client.errors_as_exceptions(True)
                                 progress = st.progress(0.0, text="Deleting...")
+                                del_row_number = int(st.session_state.fr_del_row_number)
 
-                                for idx, fname in enumerate(selected_folders):
-                                    target_sheet = None
-                                    for sref in sheets_by_folder.get(fname, []):
-                                        if "/".join(sref.rel_path) == selected_sheet_path:
-                                            target_sheet = sref
-                                            break
-
+                                def _del_one(fname):
+                                    target_sheet = next(
+                                        (s for s in sheets_by_folder.get(fname, [])
+                                         if "/".join(s.rel_path) == selected_sheet_path),
+                                        None,
+                                    )
                                     if target_sheet is None:
-                                        results.append({
-                                            "ok": False,
-                                            "folder": fname,
-                                            "error": "Sheet not found in this folder.",
-                                        })
-                                        progress.progress((idx + 1) / len(selected_folders))
-                                        continue
-
+                                        return {"ok": False, "folder": fname, "error": "Sheet not found in this folder."}
                                     try:
-                                        sync.delete_row_by_number(
-                                            client,
-                                            target_sheet.sheet_id,
-                                            int(st.session_state.fr_del_row_number),
-                                        )
-                                        results.append({"ok": True, "folder": fname})
+                                        _client = smartsheet.Smartsheet(api_token)
+                                        _client.errors_as_exceptions(True)
+                                        sync.delete_row_by_number(_client, target_sheet.sheet_id, del_row_number)
+                                        return {"ok": True, "folder": fname}
                                     except Exception as e:
-                                        results.append({
-                                            "ok": False,
-                                            "folder": fname,
-                                            "error": str(e),
-                                        })
+                                        return {"ok": False, "folder": fname, "error": str(e)}
 
-                                    progress.progress((idx + 1) / len(selected_folders))
+                                n = len(selected_folders)
+                                results_map = {}
+                                with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+                                    futures = {executor.submit(_del_one, fname): fname for fname in selected_folders}
+                                    for done, future in enumerate(as_completed(futures), 1):
+                                        results_map[futures[future]] = future.result()
+                                        progress.progress(done / n, text=f"Deleting... ({done}/{n})")
 
+                                results = [results_map[fname] for fname in selected_folders]
                                 progress.empty()
                             except Exception as e:
                                 st.error(f"Unexpected error: {e}")
