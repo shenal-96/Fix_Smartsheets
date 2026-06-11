@@ -54,7 +54,10 @@ def save_user_prefs() -> None:
 
 
 def init_state(username: str) -> None:
-    if "plans" not in st.session_state:
+    # Re-initialize whenever this is the first load OR the logged-in user changed
+    # (e.g. logout → login in the same browser tab). Without this check, the
+    # previous user's token stays in session state when a new user signs in.
+    if "plans" not in st.session_state or st.session_state.get("_session_username") != username:
         stored_token, stored_workspace = auth.load_user_secrets(username, get_secret)
 
         st.session_state.cfg_api_token = stored_token
@@ -73,6 +76,7 @@ def init_state(username: str) -> None:
         st.session_state.scan_timestamp = None
         st.session_state.confirm_apply = False
         st.session_state.apply_result = None
+        st.session_state._session_username = username
 
     # Row Editor / Add Row state -- safe to call on every rerun via setdefault
     st.session_state.setdefault("fr_folders_list", None)
