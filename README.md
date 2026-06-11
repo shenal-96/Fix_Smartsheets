@@ -152,6 +152,21 @@ Project Workspace (e.g. "Stage 6")
 
 ---
 
+## Copy a large workspace
+
+Smartsheet's built-in "Save as New" / copy-workspace refuses to copy a workspace once it exceeds its item limit (you'll have hit this around 100+ sheets). The **Copy Workspace** tab works around that by copying the workspace **folder by folder** into a brand-new workspace:
+
+1. Enter the **source workspace ID** (defaults to the one in the sidebar) and a **name for the new workspace**.
+2. Pick what to **include** (row data, attachments, comments, forms, automation rules, cell links, sharing).
+3. Click **Preview source** to see the folders and sheet counts that will be copied.
+4. Click **Copy workspace** → **Confirm**. Progress streams live; a report lists what was copied, what failed, and any warnings, plus a link to the new workspace.
+
+If a *single* folder is itself over the limit, the tool automatically splits it — recreating the folder and copying its children one at a time.
+
+**Important limitation:** because the copy runs folder by folder, **cell links, cross-sheet references, and dashboards that point _across_ folders are not re-linked** to the new copy — they keep pointing at the original workspace. Everything inside a single folder is copied and re-linked correctly. Dashboards and reports sitting at the workspace root (not inside a folder) are not copied and must be recreated manually.
+
+---
+
 ## Safety features
 
 - **Scan-then-Apply.** Scan only reads; nothing writes until you click Apply.
