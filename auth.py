@@ -14,18 +14,21 @@ user's key.
 
 Storage notes
 -------------
-* DB path defaults to ``.streamlit/users.db`` (override with ``USER_DB_PATH``).
-* Streamlit Community Cloud has an *ephemeral* filesystem -- the DB and the
-  encryption key survive within a running container but are wiped on restart.
-  For durable production use, point ``USER_DB_PATH`` at a mounted volume (or
-  swap the SQLite calls for an external DB) and set ``FERNET_KEY`` in secrets
-  so the same key is reused across restarts.
+* Set ``DATABASE_URL`` (a Postgres connection string, e.g. Neon) for durable
+  accounts + tokens. Tables are auto-created on first run.
+* Without ``DATABASE_URL`` the app falls back to a local SQLite file
+  (``.streamlit/users.db``, override with ``USER_DB_PATH``) -- fine for local
+  development, but Streamlit Community Cloud's *ephemeral* filesystem wipes it
+  on container restart.
+* Always set ``FERNET_KEY`` in secrets for production so the same encryption
+  key is reused across restarts; otherwise stored tokens become undecryptable.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Callable, Optional, Tuple
 
@@ -48,11 +51,35 @@ Validator.validate_password = lambda self, password: len(password or "") >= 4
 
 
 # ============================================================
-# Paths
+# Paths / config
 # ============================================================
 _BASE_DIR = os.path.dirname(__file__)
 _DB_PATH = os.environ.get("USER_DB_PATH", os.path.join(_BASE_DIR, ".streamlit", "users.db"))
 _KEY_PATH = os.path.join(_BASE_DIR, ".streamlit", "fernet.key")
+
+
+def _secret(key: str, default: str = "") -> str:
+    """Read a config value from Streamlit secrets, falling back to env vars.
+
+    Works at module level (no get_secret callable needed) so the DB layer can
+    decide its backend without threading secrets through every call.
+    """
+    try:
+        val = st.secrets.get(key, None)
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    return os.environ.get(key, default)
+
+
+def _database_url() -> str:
+    """Postgres connection string, if configured. Empty string => use SQLite."""
+    return _secret("DATABASE_URL", "")
+
+
+def _is_postgres() -> bool:
+    return bool(_database_url())
 
 
 # ============================================================
@@ -102,13 +129,66 @@ def _decrypt(fernet: Fernet, token: str) -> str:
 
 
 # ============================================================
-# SQLite store
+# Store -- Postgres (durable, set DATABASE_URL) or SQLite (local dev)
 # ============================================================
-def _connect() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+#
+# Streamlit Community Cloud's filesystem is ephemeral, so a SQLite file is
+# wiped on container restart. Set DATABASE_URL to a Postgres connection string
+# (e.g. Neon) for accounts + tokens that survive restarts. Without it, the app
+# falls back to a local SQLite file -- fine for development.
+#
+# Both backends accept the same SQL: parameters use "?" placeholders (translated
+# to "%s" for Postgres) and the "INSERT ... ON CONFLICT ... DO UPDATE" upsert
+# syntax is supported by SQLite 3.24+ and Postgres 9.5+.
+
+
+class _ConnWrapper:
+    """Uniform execute() over sqlite3 / psycopg2 with "?" placeholders and
+    dict-like rows (row["col"]) on both backends."""
+
+    def __init__(self, raw, is_pg: bool):
+        self._raw = raw
+        self._is_pg = is_pg
+
+    def execute(self, sql: str, params: tuple = ()):
+        if self._is_pg:
+            cur = self._raw.cursor()
+            cur.execute(sql.replace("?", "%s"), params)
+            return cur
+        return self._raw.execute(sql, params)
+
+
+@contextmanager
+def _connect():
+    """Yield a connection wrapper, committing on success and always closing."""
+    if _is_postgres():
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+
+        conn = psycopg2.connect(_database_url(), cursor_factory=RealDictCursor)
+        try:
+            yield _ConnWrapper(conn, is_pg=True)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(_DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            # WAL + busy timeout reduce "database is locked" under concurrency.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            yield _ConnWrapper(conn, is_pg=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def _init_db() -> None:
