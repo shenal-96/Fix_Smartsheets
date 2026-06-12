@@ -799,7 +799,8 @@ with tab2:
                             f"Row {st.session_state.fr_row_number} -- {selected_sheet_path}"
                         )
                         st.caption(
-                            "Edit the values below. Leave a field blank to clear that cell."
+                            "Edit the values below. Press Enter inside a field to add a new line "
+                            "within the same Smartsheet cell."
                         )
 
                         col_editable_map = st.session_state.get("fr_col_name_to_editable", {})
@@ -820,9 +821,10 @@ with tab2:
                             st.warning("This row has no editable columns.")
 
                         for col_name in editable_col_names:
-                            edited_values[col_name] = st.text_input(
+                            edited_values[col_name] = st.text_area(
                                 col_name,
                                 key=f"fr_cell_{col_name}",
+                                height=80,
                             )
 
                         if readonly_col_names:
@@ -834,9 +836,10 @@ with tab2:
                             )
                             if readonly_visibility == "Show read-only cells":
                                 for col_name in readonly_col_names:
-                                    st.text_input(
+                                    st.text_area(
                                         f"{col_name} (read-only)",
                                         key=f"fr_cell_{col_name}",
+                                        height=80,
                                         disabled=True,
                                     )
 
@@ -990,16 +993,18 @@ with tab2:
                         st.subheader(f"New row -- {selected_sheet_path}")
                         st.caption(
                             "Fill in the values for the new row. Blank fields will be skipped. "
-                            "System and formula columns are read-only and won't be set."
+                            "Press Enter inside a field to add a new line within the same "
+                            "Smartsheet cell. System and formula columns are read-only and won't be set."
                         )
 
                         add_editable_map = st.session_state.get("fr_add_col_name_to_editable", {})
                         new_values: dict = {}
                         for col_name in add_col_names:
                             is_editable = add_editable_map.get(col_name, True)
-                            new_values[col_name] = st.text_input(
+                            new_values[col_name] = st.text_area(
                                 col_name if is_editable else f"{col_name} (read-only)",
                                 key=f"fr_new_{col_name}",
+                                height=80,
                                 disabled=not is_editable,
                             )
 
