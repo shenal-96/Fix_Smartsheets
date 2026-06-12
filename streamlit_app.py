@@ -96,6 +96,7 @@ def init_state(username: str) -> None:
     st.session_state.setdefault("fr_col_name_to_type", {})
     st.session_state.setdefault("fr_col_name_to_editable", {})
     st.session_state.setdefault("fr_add_col_name_to_editable", {})
+    st.session_state.setdefault("fr_readonly_visibility", "Hide read-only cells")
     st.session_state.setdefault("fr_add_position", "Bottom of sheet")
     st.session_state.setdefault("fr_add_sibling_row_number", 1)
     st.session_state.setdefault("fr_del_loaded_row", None)
@@ -798,19 +799,46 @@ with tab2:
                             f"Row {st.session_state.fr_row_number} -- {selected_sheet_path}"
                         )
                         st.caption(
-                            "Edit the values below. Leave a field blank to clear that cell. "
-                            "System and formula columns are read-only and won't be changed."
+                            "Edit the values below. Leave a field blank to clear that cell."
                         )
 
                         col_editable_map = st.session_state.get("fr_col_name_to_editable", {})
+                        editable_col_names = [
+                            col_name
+                            for col_name in col_names
+                            if col_editable_map.get(col_name, True)
+                        ]
+                        readonly_col_names = [
+                            col_name
+                            for col_name in col_names
+                            if not col_editable_map.get(col_name, True)
+                        ]
+
                         edited_values: dict = {}
-                        for col_name in col_names:
-                            is_editable = col_editable_map.get(col_name, True)
+
+                        if not editable_col_names:
+                            st.warning("This row has no editable columns.")
+
+                        for col_name in editable_col_names:
                             edited_values[col_name] = st.text_input(
-                                col_name if is_editable else f"{col_name} (read-only)",
+                                col_name,
                                 key=f"fr_cell_{col_name}",
-                                disabled=not is_editable,
                             )
+
+                        if readonly_col_names:
+                            readonly_visibility = st.selectbox(
+                                "Read-only cells",
+                                options=["Hide read-only cells", "Show read-only cells"],
+                                key="fr_readonly_visibility",
+                                help="System and formula columns are read-only in Smartsheet.",
+                            )
+                            if readonly_visibility == "Show read-only cells":
+                                for col_name in readonly_col_names:
+                                    st.text_input(
+                                        f"{col_name} (read-only)",
+                                        key=f"fr_cell_{col_name}",
+                                        disabled=True,
+                                    )
 
                         st.divider()
 
