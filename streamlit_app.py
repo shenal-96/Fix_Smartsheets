@@ -887,6 +887,7 @@ with tab2:
                                             edited_values,
                                             col_name_to_type,
                                             col_editable,
+                                            original_values=row_data.cells_by_col_name,
                                         )
                                         return {"ok": True, "folder": fname}
                                     except Exception as e:

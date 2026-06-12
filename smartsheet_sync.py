@@ -526,11 +526,24 @@ def update_row_cells(
     updates: Dict[str, str],
     col_name_to_type: Optional[Dict[str, str]] = None,
     col_name_to_editable: Optional[Dict[str, bool]] = None,
+    original_values: Optional[Dict[str, object]] = None,
 ) -> None:
-    """Write cell updates to a row. Only sends columns with actual content.
+    """Write cell updates to a row.
 
-    Skips system/formula columns and converts values to appropriate types
-    (e.g., string "true"/"false" -> boolean for CHECKBOX).
+    For each editable column in ``updates``:
+      * a non-empty value is written (CHECKBOX strings are coerced to bool);
+      * a blank value *clears* the cell, but only if it currently holds
+        content -- an explicit empty string is sent so Smartsheet wipes the
+        value (the SDK/API does nothing when a blank value is simply omitted);
+      * a blank value whose cell is already empty is skipped, so we never send
+        a pointless no-op clear.
+
+    ``original_values`` maps column name -> current cell value and is used to
+    decide whether a blank entry is a deliberate clear. When it is not supplied
+    blank entries are skipped, preserving the previous "only send content"
+    behaviour for callers that cannot provide the current state.
+
+    Skips system/formula columns regardless of value.
     """
     row = smartsheet.models.Row()
     row.id = row_id
@@ -540,19 +553,28 @@ def update_row_cells(
         # Never write to system or formula columns.
         if col_name_to_editable is not None and not col_name_to_editable.get(col_name, True):
             continue
-        val = (new_value or "").strip()
-        if not val:
-            continue
 
+        val = (new_value or "").strip()
         cell = smartsheet.models.Cell()
         cell.column_id = col_name_to_id[col_name]
 
-        # Convert value based on column type
-        col_type = col_name_to_type.get(col_name) if col_name_to_type else None
-        if col_type == "CHECKBOX":
-            cell.value = val.lower() in ("true", "1", "yes", "checked")
+        if not val:
+            # Blank entry -- only act if the cell currently has content to clear.
+            had_content = False
+            if original_values is not None:
+                prev = original_values.get(col_name)
+                had_content = prev is not None and str(prev).strip() != ""
+            if not had_content:
+                continue
+            # An explicit empty string is what actually clears a Smartsheet cell.
+            cell.value = ""
         else:
-            cell.value = val
+            # Convert value based on column type
+            col_type = col_name_to_type.get(col_name) if col_name_to_type else None
+            if col_type == "CHECKBOX":
+                cell.value = val.lower() in ("true", "1", "yes", "checked")
+            else:
+                cell.value = val
 
         row.cells.append(cell)
     if row.cells:
