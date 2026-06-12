@@ -114,6 +114,7 @@ def init_state(username: str) -> None:
 
     # Workspace picker cache (populated by the "Scan workspaces" button).
     st.session_state.setdefault("ws_list", None)
+    st.session_state.setdefault("ws_search", "")
 
 
 def reset_results() -> None:
@@ -254,20 +255,45 @@ with st.sidebar:
 
     if ws_list:
         id_to_name = {str(wid): name for name, wid in ws_list}
-        options = [str(wid) for _, wid in ws_list]
-        default_index = options.index(current_id) if current_id in options else 0
-        chosen = st.selectbox(
-            "Workspace",
-            options=options,
-            index=default_index,
-            format_func=lambda wid: id_to_name.get(wid, wid),
-            help="Pick a workspace by name. Type in the box to search.",
-        )
-        if chosen and chosen != current_id:
-            st.session_state.cfg_workspace_id = chosen
-            save_user_prefs()
-        workspace_id = chosen or ""
-        st.caption(f"Workspace ID: `{workspace_id}`")
+        workspace_search = (st.text_input(
+            "Search workspaces",
+            key="ws_search",
+            placeholder="Type a workspace name or ID",
+            help="Filters the workspace dropdown as you type.",
+        ) or "").strip()
+        if workspace_search:
+            search_text = workspace_search.lower()
+            filtered_ws_list = [
+                (name, wid)
+                for name, wid in ws_list
+                if search_text in (name or "").lower() or search_text in str(wid)
+            ]
+            st.caption(f"Showing {len(filtered_ws_list)} of {len(ws_list)} workspace(s).")
+        else:
+            filtered_ws_list = ws_list
+
+        options = [str(wid) for _, wid in filtered_ws_list]
+        if not options:
+            st.warning("No workspaces match that search.")
+            workspace_id = current_id
+        else:
+            default_index = options.index(current_id) if current_id in options else None
+            chosen = st.selectbox(
+                "Workspace",
+                options=options,
+                index=default_index,
+                format_func=lambda wid: id_to_name.get(wid, wid),
+                placeholder="Choose a workspace",
+                help="Pick from the filtered workspace results.",
+            )
+            if chosen and chosen != current_id:
+                st.session_state.cfg_workspace_id = chosen
+                save_user_prefs()
+                workspace_id = chosen
+            else:
+                workspace_id = current_id
+        if workspace_id:
+            st.caption(f"Workspace ID: `{workspace_id}`")
     else:
         workspace_id = st.text_input(
             "Workspace ID",
